@@ -101,16 +101,30 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🔄 Scraper Controls")
+    if "last_sync" not in st.session_state:
+        st.session_state.last_sync = None
+    if "sync_error" not in st.session_state:
+        st.session_state.sync_error = None
+
     if st.button("🚀 Scrape & Sync Live Notices", type="primary"):
         with st.spinner("Scraping Tribhuvan University notice board..."):
-            scraped = TUScraper.fetch_live_notices()
+            scraped, error = TUScraper.fetch_live_notices()
             new_count = 0
             for item in scraped:
                 if save_notice(item):
                     new_count += 1
+            st.session_state.last_sync = time.strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state.sync_error = error
+            if error:
+                st.warning(f"Sync completed with notice: {error}")
             st.success(f"Sync complete! Added {new_count} new notices.")
             time.sleep(0.5)
             st.rerun()
+
+    if st.session_state.last_sync:
+        st.caption(f"Last sync: {st.session_state.last_sync}")
+    if st.session_state.sync_error:
+        st.caption(f"⚠️ {st.session_state.sync_error}")
 
     st.markdown("---")
     st.markdown("👨‍💻 **Architected by:** Samyog")

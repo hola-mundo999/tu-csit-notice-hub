@@ -1,8 +1,13 @@
 import sqlite3
 from typing import List, Dict, Optional
-import os
+import hashlib
 
 DB_PATH = "notices.db"
+
+def _notice_hash(notice: Dict) -> str:
+    """Deterministic, process-independent hash for deduplication."""
+    raw = (notice.get("title", "") + "|" + notice.get("publish_date", "") + "|" + notice.get("url", "")).encode()
+    return notice.get("notice_hash") or hashlib.md5(raw).hexdigest()
 
 def init_db(db_path: str = DB_PATH):
     conn = sqlite3.connect(db_path)
@@ -28,7 +33,7 @@ def save_notice(notice: Dict, db_path: str = DB_PATH) -> bool:
     """Inserts notice if not already present. Returns True if newly added."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    notice_hash = notice.get("notice_hash") or str(hash(notice["title"] + notice["publish_date"]))
+    notice_hash = _notice_hash(notice)
     
     try:
         cursor.execute("""

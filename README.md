@@ -75,5 +75,26 @@ Open `http://localhost:8501` to view the notice dashboard.
 
 ---
 
+## 🌐 Deployment (Streamlit Community Cloud)
+
+This is a Streamlit app. Deploy by connecting this repository to Streamlit Cloud
+with entry point `app.py`. The scraper falls back to curated notices when the TU
+portal is unreachable, and sync errors are shown on the dashboard.
+
+---
+
+## 🧪 Testing
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
+The test suite (12 tests) covers SQLite deduplication (deterministic MD5 hashes,
+not process-randomized `hash()`), notice filtering/search, scraper classification,
+semester detection with word boundaries, and curated notice integrity.
+
+---
+
 ## 📜 License
 MIT License — Free to use, adapt, and build upon.

@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 import re
 import hashlib
 
@@ -8,14 +8,17 @@ import hashlib
 class TUScraper:
     BASE_URL = "https://tuiost.edu.np"
     NOTICES_URL = "https://tuiost.edu.np/notices"
+    LAST_ERROR: Optional[str] = None
 
     @classmethod
-    def fetch_live_notices(cls) -> List[Dict]:
+    def fetch_live_notices(cls) -> Tuple[List[Dict], Optional[str]]:
         """
         Scrapes live notices from Tribhuvan University IOST portal.
-        Includes graceful fallback to verified historical notices.
+        Returns (notices, error). On network failure, returns ([], error)
+        so callers can surface it instead of silently swallowing it.
         """
-        scraped = []
+        cls.LAST_ERROR = None
+        scraped: List[Dict] = []
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -32,14 +35,16 @@ class TUScraper:
                         href = cls.BASE_URL + href
                     if text and len(text) > 10:
                         scraped.append(cls._classify_notice(text, href))
-        except Exception:
-            pass # Fall back to curated seeds if network unreachable
+            else:
+                cls.LAST_ERROR = f"TU portal returned HTTP {res.status_code}"
+        except Exception as e:
+            cls.LAST_ERROR = f"Unable to reach TU IOST portal: {e}"
 
         # If remote site is slow or offline, combine with curated verified notices
         if len(scraped) < 5:
             scraped.extend(cls.get_curated_csit_notices())
 
-        return scraped
+        return scraped, cls.LAST_ERROR
 
     @classmethod
     def _classify_notice(cls, text: str, url: str) -> Dict:
@@ -59,20 +64,20 @@ class TUScraper:
             category = "General Notice"
             is_urgent = False
 
-        # Semester Detection
+        # Semester Detection (word-boundary aware to avoid "1st" matching "21st")
         semester = "All Semesters"
         sem_patterns = [
-            ("1st Sem", ["first semester", "1st sem", "1st"]),
-            ("2nd Sem", ["second semester", "2nd sem", "2nd"]),
-            ("3rd Sem", ["third semester", "3rd sem", "3rd"]),
-            ("4th Sem", ["fourth semester", "4th sem", "4th"]),
-            ("5th Sem", ["fifth semester", "5th sem", "5th"]),
-            ("6th Sem", ["sixth semester", "6th sem", "6th"]),
-            ("7th Sem", ["seventh semester", "7th sem", "7th"]),
-            ("8th Sem", ["eighth semester", "8th sem", "8th"]),
+            ("1st Sem", [r"\b1st\b", "first semester", "1st sem"]),
+            ("2nd Sem", [r"\b2nd\b", "second semester", "2nd sem"]),
+            ("3rd Sem", [r"\b3rd\b", "third semester", "3rd sem"]),
+            ("4th Sem", [r"\b4th\b", "fourth semester", "4th sem"]),
+            ("5th Sem", [r"\b5th\b", "fifth semester", "5th sem"]),
+            ("6th Sem", [r"\b6th\b", "sixth semester", "6th sem"]),
+            ("7th Sem", [r"\b7th\b", "seventh semester", "7th sem"]),
+            ("8th Sem", [r"\b8th\b", "eighth semester", "8th sem"]),
         ]
         for sem_name, keywords in sem_patterns:
-            if any(k in lower for k in keywords):
+            if any(re.search(k, lower) for k in keywords):
                 semester = sem_name
                 break
 
