@@ -136,7 +136,7 @@ async function fetchFeed({ force = false, silent = false } = {}) {
   if (!state.notices.length) dom.feed.setAttribute("aria-busy", "true");
 
   try {
-    const url = force ? `/api/notices?t=${Date.now()}` : "/api/notices";
+    const url = `/api/notices?t=${Date.now()}`;
     const response = await fetch(url, { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();

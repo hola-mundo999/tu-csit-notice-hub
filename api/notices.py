@@ -260,6 +260,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "public, s-maxage=600, stale-while-revalidate=1800")
+        # The feed must mirror the portal, so never let a CDN or browser serve a
+        # minutes old copy. The client polls on its own schedule.
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(body)
