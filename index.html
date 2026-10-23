@@ -8,7 +8,7 @@
 <title>TU CSIT Notice Hub | Live IOST notices</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23100e0b'/%3E%3Cpath d='M9 12h14M9 16h14M9 20h9' stroke='%23e0714f' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="stylesheet" href="styles.css?v=1" />
+<link rel="stylesheet" href="styles.css?v=2" />
 </head>
 <body>
 <a class="skip" href="#feed">Skip to notices</a>
@@ -44,12 +44,12 @@
   <main>
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero__copy">
-        <p class="eyebrow">tuiost.edu.np · parsed every ten minutes</p>
+        <p class="eyebrow">tuiost.edu.np · checked every five minutes</p>
         <h1 id="hero-title">Every notice,<br /><em>one feed.</em></h1>
         <p class="hero__sub">
           Exam routines, results and form fill-up notices from the Institute of Science
-          and Technology, classified by semester          and sorted by publication date, without
-          the refresh loop.
+          and Technology, classified by semester and sorted by publication date. New
+          notices appear here on their own, without a refresh loop.
         </p>
       </div>
 
@@ -132,7 +132,7 @@
   <footer class="footer">
     <p>
       Source: <a href="https://tuiost.edu.np/notices" target="_blank" rel="noreferrer noopener">tuiost.edu.np/notices</a>.
-      Notices are parsed server-side and cached at the edge for ten minutes.
+      Notices are read from the portal every five minutes, and the newest one is shown first.
     </p>
     <p>Built by <a href="https://github.com/hola-mundo999" target="_blank" rel="noreferrer noopener">Samyog Sapkota</a></p>
   </footer>
@@ -140,6 +140,6 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="app.js?v=1" defer></script>
+<script src="app.js?v=2" defer></script>
 </body>
 </html>

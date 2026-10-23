@@ -128,7 +128,7 @@ function toast(message) {
 
 /* ----------------------------------------------------------------- fetch */
 
-async function fetchFeed({ force = false } = {}) {
+async function fetchFeed({ force = false, silent = false } = {}) {
   if (state.loading) return;
   state.loading = true;
   dom.refresh.classList.add("is-busy");
@@ -142,6 +142,8 @@ async function fetchFeed({ force = false } = {}) {
     const payload = await response.json();
     const incoming = Array.isArray(payload.notices) ? payload.notices : [];
     const hadLive = state.source === "live" && state.notices.length > 0;
+    const known = new Set(state.notices.map((notice) => notice.id));
+    const fresh = state.notices.length ? incoming.filter((notice) => !known.has(notice.id)) : [];
 
     // A failed scrape should never replace a good live feed with six curated cards.
     if (payload.source !== "live" && hadLive) {
@@ -160,7 +162,11 @@ async function fetchFeed({ force = false } = {}) {
     state.stale = false;
     writeCache({ notices: state.notices, source: state.source, fetched_at: state.fetchedAt, error: state.error });
     render();
-    if (force) toast(state.source === "live" ? "Feed refreshed from tuiost.edu.np" : "Portal unreachable, fallback refreshed");
+    if (fresh.length && !silent) {
+      toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on tuiost.edu.np`);
+    } else if (force) {
+      toast(state.source === "live" ? "Checked tuiost.edu.np just now" : "Portal unreachable, fallback refreshed");
+    }
   } catch (error) {
     state.error = String(error.message || error);
     if (!state.notices.length) {
@@ -439,13 +445,23 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-window.addEventListener("online", () => fetchFeed());
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.fetchedAt) {
-    const age = Date.now() - new Date(state.fetchedAt).getTime();
-    if (age > CACHE_TTL) fetchFeed();
-  }
-});
+window.addEventListener("online", () => fetchFeed({ silent: true }));
+
+// The feed follows the portal by itself: every five minutes, and again whenever
+// the tab comes back into focus, so a new notice shows up without a reload.
+const POLL_MS = 5 * 60 * 1000;
+window.setInterval(() => {
+  if (document.visibilityState === "visible") fetchFeed({ silent: true });
+}, POLL_MS);
+
+function refreshIfStale() {
+  if (document.visibilityState !== "visible") return;
+  const age = state.fetchedAt ? Date.now() - new Date(state.fetchedAt).getTime() : Infinity;
+  if (age > 60_000) fetchFeed({ silent: true });
+}
+
+document.addEventListener("visibilitychange", refreshIfStale);
+window.addEventListener("focus", refreshIfStale);
 
 /* ------------------------------------------------------------------ boot */
 
@@ -455,8 +471,9 @@ function boot() {
   if (cached) {
     state.notices = cached.notices;
     state.source = cached.source || "fallback";
-    state.fetchedAt = cached.fetched_at || null;        state.error = cached.error || null;
-        render();
+    state.fetchedAt = cached.fetched_at || null;
+    state.error = cached.error || null;
+    render();
     const age = state.fetchedAt ? Date.now() - new Date(state.fetchedAt).getTime() : Infinity;
     // The curated fallback is a stopgap, never a reason to skip a live check.
     if (age > CACHE_TTL || state.source !== "live") fetchFeed();

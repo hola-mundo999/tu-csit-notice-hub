@@ -376,6 +376,7 @@ a:hover { text-decoration: underline; }
   position: relative;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 12px;
   padding: 16px 17px 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent), var(--panel);
@@ -430,12 +431,14 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: -0.005em;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* Show the whole notice title. Clamping swallowed long routine titles. */
+  display: block;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
 }
-.notice__title a { color: var(--text); }
+.notice__title a { color: var(--text); overflow-wrap: anywhere; }
 .notice__title a:hover { color: var(--accent); text-decoration: none; }
 
 .notice__foot {
