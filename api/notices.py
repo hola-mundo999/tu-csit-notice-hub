@@ -143,8 +143,15 @@ def classify(title: str) -> Dict[str, Any]:
     return {"category": category, "semester": semester, "urgent": urgent}
 
 
+def normalize_dashes(text: str) -> str:
+    """The portal mixes en and em dashes into titles; house style uses a hyphen."""
+    text = re.sub(r"\s*[\u2014\u2013]\s*", " - ", text or "")
+    text = re.sub(r"[\u2010\u2011\u2012\u2015\u2212]", "-", text)
+    return text
+
+
 def build_notice(title: str, url: str, published: Optional[str], raw_date: str, source: str) -> Dict[str, Any]:
-    clean = re.sub(r"\s+", " ", title).strip(" .-")
+    clean = re.sub(r"\s+", " ", normalize_dashes(title)).strip(" .-")
     meta = classify(clean)
     digest = hashlib.md5(f"{clean}|{url}".encode("utf-8")).hexdigest()[:12]
     return {
