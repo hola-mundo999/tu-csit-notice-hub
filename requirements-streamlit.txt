@@ -1,0 +1,7 @@
+# Legacy Streamlit dashboard (app.py). Not used by the deployed site.
+streamlit>=1.39.0
+beautifulsoup4>=4.12.3
+requests>=2.31.0
+
+# Development / testing
+pytest>=8.0.0

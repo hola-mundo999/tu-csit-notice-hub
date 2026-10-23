@@ -97,4 +97,4 @@ semester detection with word boundaries, and curated notice integrity.
 ---
 
 ## 📜 License
-MIT License — Free to use, adapt, and build upon.
+MIT License. Free to use, adapt, and build upon.

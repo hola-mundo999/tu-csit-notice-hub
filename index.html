@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#100e0b" />
+<meta name="description" content="TU CSIT Notice Hub: live exam routines, results and form fill-up notices from Tribhuvan University IOST, classified by semester." />
+<title>TU CSIT Notice Hub | Live IOST notices</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23100e0b'/%3E%3Cpath d='M9 12h14M9 16h14M9 20h9' stroke='%23e0714f' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="styles.css?v=1" />
+</head>
+<body>
+<a class="skip" href="#feed">Skip to notices</a>
+
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 4h9l3 3v13H6z" />
+          <path d="M9 10h6M9 14h6M9 18h4" />
+        </svg>
+      </span>
+      <div class="brand__text">
+        <strong>Notice Hub</strong>
+        <span>TU IOST · BSc CSIT</span>
+      </div>
+    </div>
+
+    <div class="topbar__tools">
+      <span class="sync" id="sync-state">Connecting…</span>
+      <span class="source" id="source-badge" data-source="loading">
+        <span class="source__dot" aria-hidden="true"></span>
+        <span id="source-text">Checking</span>
+      </span>
+      <button class="btn btn--accent" id="refresh" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 5v6h-6" /></svg>
+        <span id="refresh-label">Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero__copy">
+        <p class="eyebrow">tuiost.edu.np · parsed every ten minutes</p>
+        <h1 id="hero-title">Every notice,<br /><em>one feed.</em></h1>
+        <p class="hero__sub">
+          Exam routines, results and form fill-up notices from the Institute of Science
+          and Technology, classified by semester          and sorted by publication date, without
+          the refresh loop.
+        </p>
+      </div>
+
+      <dl class="stats" aria-label="Feed summary">
+        <div class="stat">
+          <dd id="stat-total">0</dd>
+          <dt>Notices</dt>
+        </div>
+        <div class="stat">
+          <dd id="stat-exam">0</dd>
+          <dt>Exam routines</dt>
+        </div>
+        <div class="stat">
+          <dd id="stat-results">0</dd>
+          <dt>Results</dt>
+        </div>
+        <div class="stat">
+          <dd id="stat-forms">0</dd>
+          <dt>Form fill-ups</dt>
+        </div>
+      </dl>
+    </section>
+
+    <section class="toolbar" aria-label="Filters">
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M16.5 16.5 21 21" /></svg>
+        <input id="search" type="search" placeholder="Search notices: try “routine”, “result”, “4th sem”" autocomplete="off" aria-label="Search notices" />
+        <kbd>/</kbd>
+      </div>
+
+      <label class="select">
+        <span class="select__label">Semester</span>
+        <select id="semester" aria-label="Filter by semester">
+          <option value="all">All semesters</option>
+          <option value="1st Sem">1st sem</option>
+          <option value="2nd Sem">2nd sem</option>
+          <option value="3rd Sem">3rd sem</option>
+          <option value="4th Sem">4th sem</option>
+          <option value="5th Sem">5th sem</option>
+          <option value="6th Sem">6th sem</option>
+          <option value="7th Sem">7th sem</option>
+          <option value="8th Sem">8th sem</option>
+        </select>
+      </label>
+    </section>
+
+    <div class="chips" id="chips" role="group" aria-label="Filter by category">
+      <button class="chip is-active" data-category="all" type="button" aria-pressed="true">All <span data-count="all">0</span></button>
+      <button class="chip" data-category="Exam Routine" type="button" aria-pressed="false">Exam routine <span data-count="Exam Routine">0</span></button>
+      <button class="chip" data-category="Results" type="button" aria-pressed="false">Results <span data-count="Results">0</span></button>
+      <button class="chip" data-category="Form Fill Up" type="button" aria-pressed="false">Form fill-up <span data-count="Form Fill Up">0</span></button>
+      <button class="chip" data-category="General Notice" type="button" aria-pressed="false">General <span data-count="General Notice">0</span></button>
+    </div>
+
+    <div class="result-line">
+      <p id="result-line">Loading notices…</p>
+      <button class="text-btn" id="reset" type="button" hidden>Clear filters</button>
+    </div>
+
+    <div class="banner" id="banner" hidden>
+      <span class="banner__dot" aria-hidden="true"></span>
+      <p id="banner-text"></p>
+    </div>
+
+    <section id="feed" class="feed" aria-live="polite" aria-busy="true">
+      <article class="notice is-skeleton"></article>
+      <article class="notice is-skeleton"></article>
+      <article class="notice is-skeleton"></article>
+      <article class="notice is-skeleton"></article>
+    </section>
+
+    <div class="empty" id="empty" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+      <h2>Nothing matches that filter</h2>
+      <p>Try a different semester, or clear the search.</p>
+      <button class="btn btn--ghost" id="empty-reset" type="button">Clear filters</button>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>
+      Source: <a href="https://tuiost.edu.np/notices" target="_blank" rel="noreferrer noopener">tuiost.edu.np/notices</a>.
+      Notices are parsed server-side and cached at the edge for ten minutes.
+    </p>
+    <p>Built by <a href="https://github.com/hola-mundo999" target="_blank" rel="noreferrer noopener">Samyog Sapkota</a></p>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js?v=1" defer></script>
+</body>
+</html>
