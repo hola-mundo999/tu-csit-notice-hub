@@ -53,6 +53,7 @@ const state = {
   fetchedAt: null,
   error: null,
   stale: false,
+  site: "",
   loading: false,
   query: "",
   semester: "all",
@@ -128,6 +129,144 @@ function toast(message) {
 
 /* ----------------------------------------------------------------- fetch */
 
+/* IoST publishes on iost.tu.edu.np. The server function may run outside the
+   network that reaches that host, so when it can only read the older
+   tuiost.edu.np listing, the browser tries the current site itself. The
+   visitor is usually in Nepal, where it answers. Any failure is silent and
+   the server feed stays as it is. */
+const PORTAL_CATEGORIES = [
+  ["Exam Routine", ["routine", "schedule", "exam center", "examination center", "time table", "timetable", "तालिका"]],
+  ["Results", ["result", "re-total", "retotaling", "re-totaling", "topper", "pass list", "नतिजा", "नतीजा", "फलाफल"]],
+  ["Form Fill Up", ["form fill", "fill-up", "fill up", "registration", "deadline", "apply", "फाराम भर्ने", "फारम भर्ने", "आवेदन फाराम"]],
+];
+
+const PORTAL_SEMESTERS = [
+  ["8th Sem", [/\b8th\s+sem/i, /\beighth\s+sem/i, /\bviii\s+sem/i]],
+  ["7th Sem", [/\b7th\s+sem/i, /\bseventh\s+sem/i, /\bvii\s+sem/i]],
+  ["6th Sem", [/\b6th\s+sem/i, /\bsixth\s+sem/i, /\bvi\s+sem/i]],
+  ["5th Sem", [/\b5th\s+sem/i, /\bfifth\s+sem/i, /\bv\s+sem/i]],
+  ["4th Sem", [/\b4th\s+sem/i, /\bfourth\s+sem/i, /\biv\s+sem/i]],
+  ["3rd Sem", [/\b3rd\s+sem/i, /\bthird\s+sem/i, /\biii\s+sem/i]],
+  ["2nd Sem", [/\b2nd\s+sem/i, /\bsecond\s+sem/i, /\bii\s+sem/i]],
+  ["1st Sem", [/\b1st\s+sem/i, /\bfirst\s+sem/i, /\bi\s+sem/i]],
+];
+
+function classifyPortal(title) {
+  const lower = title.toLowerCase();
+  let category = "General Notice";
+  for (const [name, words] of PORTAL_CATEGORIES) {
+    if (words.some((word) => lower.includes(word))) {
+      category = name;
+      break;
+    }
+  }
+  let semester = "All Semesters";
+  for (const [name, patterns] of PORTAL_SEMESTERS) {
+    if (patterns.some((pattern) => pattern.test(lower))) {
+      semester = name;
+      break;
+    }
+  }
+  const urgent =
+    category === "Exam Routine" ||
+    category === "Form Fill Up" ||
+    lower.includes("last date");
+  return { category, semester, urgent };
+}
+
+function digest12(value) {
+  let h = 5381;
+  for (let i = 0; i < value.length; i++) h = ((h << 5) + h) ^ value.charCodeAt(i);
+  return (h >>> 0).toString(36).padStart(7, "0");
+}
+
+function readCurrentPortal(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const notices = [];
+  const seen = new Set();
+  for (const block of doc.querySelectorAll("div.recent-post-wrapper")) {
+    const link = block.querySelector("div.detail a[href]");
+    if (!link) continue;
+    const heading = link.querySelector("h5");
+    const title = String((heading && heading.textContent) || link.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (title.length < 8) continue;
+    let url;
+    try {
+      url = new URL(link.getAttribute("href"), "https://iost.tu.edu.np/").href;
+    } catch {
+      continue;
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const dateEl = block.querySelector(".nep_date") || block.querySelector(".date");
+    const raw = dateEl ? dateEl.textContent.trim() : "";
+    const published = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+    notices.push({
+      id: digest12(`${title}|${url}`),
+      title: title.replace(/\s*[\u2014\u2013]\s*/g, " - ").slice(0, 180),
+      url,
+      publish_date: published,
+      date_label: raw || "Undated",
+      is_pdf: /\.pdf($|\?)/i.test(url),
+      source: "live",
+      ...classifyPortal(title),
+    });
+  }
+  notices.sort(
+    (a, b) =>
+      String(b.publish_date || "").localeCompare(String(a.publish_date || "")) ||
+      b.title.localeCompare(a.title)
+  );
+  return notices;
+}
+
+async function portalFetch(url) {
+  // An unreachable host can hang for a minute. The feed must never wait that
+  // long for a site that may simply not answer this network.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    return await fetch(url, { credentials: "omit", signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readPortalDirectly() {
+  try {
+    const notices = [];
+    const seen = new Set();
+    let url = "https://iost.tu.edu.np/notices";
+    // Two cursor pages is enough for a feed that shows twenty cards.
+    for (let page = 0; page < 2 && url; page += 1) {
+      const response = await portalFetch(url);
+      if (!response.ok) break;
+      const html = await response.text();
+      const batch = readCurrentPortal(html).filter((notice) => !seen.has(notice.url));
+      batch.forEach((notice) => seen.add(notice.url));
+      notices.push(...batch);
+      if (!batch.length) break;
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const next = [...doc.querySelectorAll("ul.pagination a.page-link[href]")].find((link) =>
+        link.href.includes("cursor=") && !/previous/i.test(link.textContent)
+      );
+      url = next ? new URL(next.getAttribute("href"), "https://iost.tu.edu.np/notices").href : "";
+    }
+    if (!notices.length) return null;
+    notices.sort(
+      (a, b) =>
+        String(b.publish_date || "").localeCompare(String(a.publish_date || "")) ||
+        b.title.localeCompare(a.title)
+    );
+    return notices;
+  } catch {
+    // Blocked by CORS, offline, or the host does not answer from here.
+    return null;
+  }
+}
+
 async function fetchFeed({ force = false, silent = false } = {}) {
   if (state.loading) return;
   state.loading = true;
@@ -136,6 +275,35 @@ async function fetchFeed({ force = false, silent = false } = {}) {
   if (!state.notices.length) dom.feed.setAttribute("aria-busy", "true");
 
   try {
+    /* Read iost.tu.edu.np from the visitor's own network first. The serverless
+       function runs outside it, and a cached older listing is worse than a
+       short one from the site that is actually publishing. */
+    const direct = await readPortalDirectly();
+    if (direct && direct.length) {
+      const known = new Set(state.notices.map((notice) => notice.id));
+      const fresh = state.notices.length ? direct.filter((notice) => !known.has(notice.id)) : [];
+      state.notices = direct;
+      state.source = "live";
+      state.site = "iost.tu.edu.np";
+      state.fetchedAt = new Date().toISOString();
+      state.error = null;
+      state.stale = false;
+      writeCache({
+        notices: state.notices,
+        source: state.source,
+        site: state.site,
+        fetched_at: state.fetchedAt,
+        error: null,
+      });
+      render();
+      if (fresh.length && !silent) {
+        toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on iost.tu.edu.np`);
+      } else if (force) {
+        toast("Checked iost.tu.edu.np just now");
+      }
+      return;
+    }
+
     const url = `/api/notices?t=${Date.now()}`;
     const response = await fetch(url, { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -157,15 +325,16 @@ async function fetchFeed({ force = false, silent = false } = {}) {
 
     state.notices = incoming;
     state.source = payload.source === "live" ? "live" : "fallback";
+    state.site = payload.source_site || "";
     state.fetchedAt = payload.fetched_at || new Date().toISOString();
     state.error = payload.error || null;
     state.stale = false;
-    writeCache({ notices: state.notices, source: state.source, fetched_at: state.fetchedAt, error: state.error });
+    writeCache({ notices: state.notices, source: state.source, site: state.site, fetched_at: state.fetchedAt, error: state.error });
     render();
     if (fresh.length && !silent) {
-      toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on tuiost.edu.np`);
+      toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on ${state.site || "the portal"}`);
     } else if (force) {
-      toast(state.source === "live" ? "Checked tuiost.edu.np just now" : "Portal unreachable, fallback refreshed");
+      toast(state.source === "live" ? `Checked ${state.site || "the portal"} just now` : "Portal unreachable, fallback refreshed");
     }
   } catch (error) {
     state.error = String(error.message || error);
@@ -174,6 +343,7 @@ async function fetchFeed({ force = false, silent = false } = {}) {
       if (cached) {
         state.notices = cached.notices;
         state.source = cached.source || "fallback";
+        state.site = cached.site || "";
         state.fetchedAt = cached.fetched_at || null;
       }
     }
@@ -248,6 +418,20 @@ function renderBadge() {
   const [label, kind] = map[state.source] || map.loading;
   dom.sourceText.textContent = label;
   dom.sourceBadge.dataset.source = kind;
+  // IoST publishes on iost.tu.edu.np. tuiost.edu.np still answers but has not
+  // taken a notice since 2023, so say so instead of showing a quiet "Live".
+  const site = state.site || "";
+  const staleSite = site === "tuiost.edu.np";
+  if (state.source === "live") {
+    if (staleSite) {
+      dom.sourceText.textContent = "Old portal";
+      dom.sourceBadge.dataset.source = "fallback";
+      dom.sourceBadge.title =
+        "iost.tu.edu.np could not be reached, so this is the older tuiost.edu.np feed, which stopped publishing in 2023.";
+    } else {
+      dom.sourceBadge.title = site ? `Reading ${site}` : "Reading the IoST portal";
+    }
+  }
   dom.sync.textContent = state.loading ? "Syncing…" : formatSync(state.fetchedAt);
 }
 
@@ -256,6 +440,10 @@ function renderBanner() {
     dom.banner.hidden = false;
     dom.bannerText.textContent =
       "The latest refresh failed, so this is the last live feed. Try Refresh again in a minute.";
+  } else if (state.source === "live" && state.site === "tuiost.edu.np") {
+    dom.banner.hidden = false;
+    dom.bannerText.textContent =
+      "iost.tu.edu.np was not reachable from this server, so the older tuiost.edu.np feed is shown. It stopped publishing in 2023.";
   } else if (state.source === "fallback" || state.source === "error") {
     dom.banner.hidden = false;
     dom.bannerText.textContent = state.error
@@ -471,6 +659,7 @@ function boot() {
   if (cached) {
     state.notices = cached.notices;
     state.source = cached.source || "fallback";
+    state.site = cached.site || "";
     state.fetchedAt = cached.fetched_at || null;
     state.error = cached.error || null;
     render();

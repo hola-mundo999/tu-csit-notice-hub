@@ -222,10 +222,11 @@ a:hover { text-decoration: underline; }
 /* ==========================================================================
    Toolbar
    ========================================================================== */
-.toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
 
 .search {
   flex: 1 1 340px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -292,9 +293,15 @@ a:hover { text-decoration: underline; }
 /* ==========================================================================
    Category chips
    ========================================================================== */
-/* Chips and the result line are separate rows. Negative margins here pulled
-   them on top of each other on narrow screens. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+/* Chips sit under the toolbar as their own row. The margin is what keeps the
+   Search field, the chips and the result line from ever sharing pixels. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 7px;
+  margin-top: 14px;
+  padding-bottom: 2px;
+}
 
 .chip {
   display: inline-flex;
@@ -307,6 +314,7 @@ a:hover { text-decoration: underline; }
   padding: 6px 12px;
   font-size: 11.5px;
   font-weight: 600;
+  flex: 0 0 auto;
   transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
 }
 .chip span {
@@ -327,8 +335,7 @@ a:hover { text-decoration: underline; }
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  /* Clear the chip row above without pulling the feed up behind it. */
-  margin: 6px 0 0;
+  margin: 12px 0 0;
   min-height: 18px;
 }
 .result-line p {

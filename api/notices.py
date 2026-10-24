@@ -24,7 +24,7 @@ import hashlib
 import json
 import re
 from http.server import BaseHTTPRequestHandler
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
@@ -32,6 +32,14 @@ from bs4 import BeautifulSoup
 
 PORTAL = "https://tuiost.edu.np/notices"
 BASE = "https://tuiost.edu.np"
+# IoST moved its own site in 2081. tuiost.edu.np still answers but stopped
+# publishing, so its newest entry sits three years in the past. iost.tu.edu.np
+# carries the current notices, though some networks outside Nepal cannot reach
+# it, which is why the legacy portal stays as the second source.
+IOST = "https://iost.tu.edu.np"
+IOST_NOTICES = f"{IOST}/notices"
+IOST_TIMEOUT = 10
+IOST_PAGES = 3
 TIMEOUT = 12
 HEADERS = {
     "User-Agent": (
@@ -55,9 +63,9 @@ SEMESTERS = [
 ]
 
 CATEGORY_RULES = [
-    ("Exam Routine", ("routine", "schedule", "exam center", "examination center", "time table", "timetable")),
-    ("Results", ("result", "re-total", "retotaling", "re-totaling", "topper", "pass list")),
-    ("Form Fill Up", ("form fill", "fill-up", "fill up", "registration", "deadline", "apply")),
+    ("Exam Routine", ("routine", "schedule", "exam center", "examination center", "time table", "timetable", "तालिका")),
+    ("Results", ("result", "re-total", "retotaling", "re-totaling", "topper", "pass list", "नतिजा", "नतीजा", "फलाफल")),
+    ("Form Fill Up", ("form fill", "fill-up", "fill up", "registration", "deadline", "apply", "फाराम भर्ने", "फारम भर्ने", "आवेदन फाराम")),
 ]
 
 CURATED = [
@@ -168,7 +176,64 @@ def build_notice(title: str, url: str, published: Optional[str], raw_date: str, 
     }
 
 
-def scrape() -> List[Dict[str, Any]]:
+def parse_iost_page(soup: BeautifulSoup, seen: set) -> List[Dict[str, Any]]:
+    """Parse the current IoST site, whose list is one block per notice.
+
+        <div class="recent-post-wrapper shdow">
+          <div class="date"><span class="nep_date">2026-07-06</span></div>
+          <div class="detail"><a href="/notices/13684"><h5>Title</h5></a></div>
+        </div>
+
+    The link is a notice page rather than a PDF, and pagination is a cursor in
+    the query string rather than a page number.
+    """
+    notices: List[Dict[str, Any]] = []
+    for block in soup.select("div.recent-post-wrapper"):
+        link = block.select_one("div.detail a[href]")
+        if not link:
+            continue
+        heading = link.find("h5")
+        title = (heading.get_text(" ", strip=True) if heading else "") or link.get_text(" ", strip=True)
+        if len(title) < 8:
+            continue
+        date_el = block.select_one(".nep_date") or block.select_one(".date")
+        raw_date = date_el.get_text(" ", strip=True) if date_el else ""
+        notice = build_notice(title, urljoin(IOST + "/", link["href"]), parse_date(raw_date), raw_date, "live")
+        if notice["url"] in seen:
+            continue
+        seen.add(notice["url"])
+        notices.append(notice)
+    return notices
+
+
+def scrape_iost() -> List[Dict[str, Any]]:
+    """Current IoST notices, followed through the cursor pagination."""
+    notices: List[Dict[str, Any]] = []
+    seen: set = set()
+    url: Optional[str] = IOST_NOTICES
+    for _ in range(IOST_PAGES):
+        if not url:
+            break
+        response = requests.get(url, headers=HEADERS, timeout=IOST_TIMEOUT)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        found = parse_iost_page(soup, seen)
+        notices.extend(found)
+        if len(found) < 1:
+            break
+        next_link = None
+        for item in soup.select("ul.pagination a.page-link[href]"):
+            href = item.get("href", "")
+            if "cursor=" in href and "Previous" not in item.get_text():
+                next_link = href
+                break
+        url = urljoin(IOST_NOTICES, next_link) if next_link else None
+    notices.sort(key=lambda item: (item["publish_date"] or "", item["title"]), reverse=True)
+    return notices
+
+
+def scrape_legacy() -> List[Dict[str, Any]]:
+    """The old tuiost.edu.np portal, kept for networks that cannot reach IoST."""
     response = requests.get(PORTAL, headers=HEADERS, timeout=TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -218,6 +283,26 @@ def scrape() -> List[Dict[str, Any]]:
     return notices
 
 
+def scrape() -> Tuple[List[Dict[str, Any]], str, Optional[str]]:
+    """Read the freshest portal this network can reach.
+
+    Returns (notices, site label, error). The new site first, because it is
+    the only one still publishing; the legacy portal second, so the feed still
+    works from a network where iost.tu.edu.np does not answer.
+    """
+    errors: List[str] = []
+    for label, reader in (("iost.tu.edu.np", scrape_iost), ("tuiost.edu.np", scrape_legacy)):
+        try:
+            notices = reader()
+        except Exception as exc:  # noqa: BLE001 - try the next portal
+            errors.append(f"{label}: {type(exc).__name__}"[:80])
+            continue
+        if notices:
+            return notices, label, None
+        errors.append(f"{label}: no recognisable notices")
+    return [], "none", "; ".join(errors)[:200]
+
+
 def fallback_notices(error: Optional[str]) -> List[Dict[str, Any]]:
     today = dt.date.today().isoformat()
     return [
@@ -236,22 +321,20 @@ class handler(BaseHTTPRequestHandler):
         error = None
         notices: List[Dict[str, Any]] = []
         source = "live"
+        site = ""
 
-        try:
-            notices = scrape()
-            if not notices:
-                error = "The TU portal returned a page with no recognisable notices."
-        except Exception as exc:  # network, HTTP, parsing
-            error = f"{type(exc).__name__}: {exc}"[:200]
+        notices, site, error = scrape()
 
         if not notices:
             source = "fallback"
+            site = "curated list"
             notices = fallback_notices(error)
 
         payload = {
             "notices": notices,
             "source": source,
-            "portal": PORTAL,
+            "source_site": site,
+            "portal": IOST_NOTICES,
             "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "error": error,
         }
