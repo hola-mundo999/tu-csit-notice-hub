@@ -94,7 +94,7 @@ a:hover { text-decoration: underline; }
   flex: none;
 }
 .brand__mark svg { width: 21px; height: 21px; }
-.brand__text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.brand__text { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
 .brand__text strong { font-size: 15px; letter-spacing: 0.01em; }
 .brand__text span {
   font-family: var(--mono);
@@ -177,7 +177,8 @@ a:hover { text-decoration: underline; }
   font-family: var(--serif);
   font-weight: 400;
   font-size: clamp(34px, 5.2vw, 62px);
-  line-height: 1.02;
+  /* Enough room for the serif descenders, without the huge gap that 1.4 gave. */
+  line-height: 1.12;
   letter-spacing: -0.025em;
 }
 .hero h1 em { font-style: italic; color: var(--accent); }
@@ -205,12 +206,13 @@ a:hover { text-decoration: underline; }
   margin: 0;
   font-family: var(--serif);
   font-size: 30px;
-  line-height: 1.1;
+  line-height: 1.35;
   letter-spacing: -0.02em;
 }
 .stat dt {
   font-family: var(--mono);
   font-size: 9px;
+  line-height: 1.4;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
@@ -290,7 +292,9 @@ a:hover { text-decoration: underline; }
 /* ==========================================================================
    Category chips
    ========================================================================== */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: -8px; }
+/* Chips and the result line are separate rows. Negative margins here pulled
+   them on top of each other on narrow screens. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
 
 .chip {
   display: inline-flex;
@@ -323,7 +327,9 @@ a:hover { text-decoration: underline; }
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 2px 0 -6px;
+  /* Clear the chip row above without pulling the feed up behind it. */
+  margin: 6px 0 0;
+  min-height: 18px;
 }
 .result-line p {
   margin: 0;
@@ -429,7 +435,7 @@ a:hover { text-decoration: underline; }
   margin: 0;
   font-size: 14.5px;
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.55;
   letter-spacing: -0.005em;
   /* Show the whole notice title. Clamping swallowed long routine titles. */
   display: block;
@@ -449,9 +455,9 @@ a:hover { text-decoration: underline; }
   margin-top: auto;
   padding-top: 4px;
 }
-.notice__date { display: flex; flex-direction: column; line-height: 1.3; }
-.notice__date strong { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 500; }
-.notice__date span { font-family: var(--mono); font-size: 9.5px; color: var(--dim); }
+.notice__date { display: flex; flex-direction: column; line-height: 1.4; min-width: 0; }
+.notice__date strong { font-family: var(--mono); font-size: 10.5px; line-height: 1.45; color: var(--muted); font-weight: 500; }
+.notice__date span { font-family: var(--mono); font-size: 9.5px; line-height: 1.45; color: var(--dim); }
 
 .notice__actions { display: flex; gap: 6px; }
 .icon-btn {
@@ -536,6 +542,8 @@ a:hover { text-decoration: underline; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero h1 { font-size: clamp(32px, 9vw, 44px); }
   .toolbar { flex-direction: column; }
+  /* In a column flexbox a 340px flex-basis becomes a 340px tall search box. */
+  .search { flex: 0 0 auto; }
   .select { justify-content: space-between; }
   .feed { grid-template-columns: 1fr; }
   .footer { flex-direction: column; gap: 6px; }
