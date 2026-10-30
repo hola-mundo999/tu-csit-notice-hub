@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 import database
+from notice_metadata import CATEGORY_ORDER, classify, programmes_for
 
 IOST = "https://iost.tu.edu.np"
 IOST_NOTICES = f"{IOST}/notices"
@@ -28,25 +29,6 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-# A semester is only claimed when the number is attached to "sem" / "semester";
-# matching a bare "Second" turned a Ph.D. festival announcement into 2nd Sem.
-SEMESTERS = [
-    ("8th Sem", [r"\b8th\s+sem", r"\beighth\s+sem", r"\bviii\s+sem"]),
-    ("7th Sem", [r"\b7th\s+sem", r"\bseventh\s+sem", r"\bvii\s+sem"]),
-    ("6th Sem", [r"\b6th\s+sem", r"\bsixth\s+sem", r"\bvi\s+sem"]),
-    ("5th Sem", [r"\b5th\s+sem", r"\bfifth\s+sem", r"\bv\s+sem"]),
-    ("4th Sem", [r"\b4th\s+sem", r"\bfourth\s+sem", r"\biv\s+sem"]),
-    ("3rd Sem", [r"\b3rd\s+sem", r"\bthird\s+sem", r"\biii\s+sem"]),
-    ("2nd Sem", [r"\b2nd\s+sem", r"\bsecond\s+sem", r"\bii\s+sem"]),
-    ("1st Sem", [r"\b1st\s+sem", r"\bfirst\s+sem", r"\bi\s+sem"]),
-]
-
-CATEGORY_RULES = [
-    ("Exam Routine", ("routine", "schedule", "exam center", "examination center", "time table", "timetable", "तालिका")),
-    ("Results", ("result", "re-total", "retotaling", "re-totaling", "topper", "pass list", "नतिजा", "नतीजा", "फलाफल")),
-    ("Form Fill Up", ("form fill", "fill-up", "fill up", "registration", "deadline", "apply", "फाराम भर्ने", "फारम भर्ने", "आवेदन फाराम")),
-]
 
 DATE_FORMATS = ("%d %b, %Y", "%d %B, %Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%b %d, %Y", "%B %d, %Y")
 
@@ -133,24 +115,6 @@ def parse_date(raw: str) -> Optional[str]:
     return None
 
 
-def classify(title: str) -> Dict[str, Any]:
-    lower = title.lower()
-    category = "General Notice"
-    for name, keywords in CATEGORY_RULES:
-        if any(word in lower for word in keywords):
-            category = name
-            break
-
-    semester = "All Semesters"
-    for name, patterns in SEMESTERS:
-        if any(re.search(pattern, lower) for pattern in patterns):
-            semester = name
-            break
-
-    urgent = category in ("Exam Routine", "Results") or "urgent" in lower or "last date" in lower
-    return {"category": category, "semester": semester, "urgent": urgent}
-
-
 def normalize_dashes(text: str) -> str:
     """The portal mixes en and em dashes into titles; house style uses a hyphen."""
     text = re.sub(r"\s*[\u2014\u2013]\s*", " - ", text or "")
@@ -176,6 +140,7 @@ def build_notice(title: str, url: str, published: Optional[str], raw_date: str, 
         "category": meta["category"],
         "semester": meta["semester"],
         "urgent": meta["urgent"],
+        "programmes": meta["programmes"],
         "is_pdf": url.lower().endswith(".pdf"),
         "source": source,
     }
@@ -306,6 +271,7 @@ def archive_notices(
     semester: Optional[str] = None,
     search_query: Optional[str] = None,
     sort_order: str = "newest",
+    programme: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], int]:
     if not Path(database.DB_PATH).is_file():
         return None, 0
@@ -319,6 +285,7 @@ def archive_notices(
         semester=semester,
         search_query=search_query,
         sort_order=sort_order,
+        programme=programme,
     )
     if not records:
         return [], total
@@ -349,6 +316,7 @@ def archive_notices(
             "date_label": record.get("source_published_at") or record.get("publish_date") or "Undated",
             "category": record["category"],
             "semester": record["semester"],
+            "programmes": programmes_for(record["title"]),
             "urgent": bool(record["is_urgent"]),
             "source": "archive",
             "attachments": attachments,
@@ -368,11 +336,38 @@ def _summarize_notices(notices: List[Dict[str, Any]]) -> Dict[str, int]:
         "Exam Routine": "exam_routines",
         "Results": "results",
         "Form Fill Up": "form_fill_ups",
+        "General Notice": "general_notices",
+        "General": "general_notices",
     }
     for notice in notices:
         key = categories.get(notice.get("category"))
-        counts[key or "general_notices"] += 1
+        if key:
+            counts[key] += 1
     return counts
+
+
+def _category_counts(notices: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = {category: 0 for category in CATEGORY_ORDER}
+    for notice in notices:
+        category = notice.get("category") or "General Notice"
+        if category == "General":
+            category = "General Notice"
+        counts[category] = counts.get(category, 0) + 1
+    return counts
+
+
+def _programme_options(notices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    counts: Dict[str, int] = {}
+    for notice in notices:
+        programmes = notice.get("programmes")
+        if not isinstance(programmes, list):
+            programmes = programmes_for(notice.get("title", ""))
+        for programme in programmes:
+            counts[programme] = counts.get(programme, 0) + 1
+    return [
+        {"name": name, "count": count}
+        for name, count in sorted(counts.items(), key=lambda item: item[0].casefold())
+    ]
 
 
 def _live_matches(
@@ -380,10 +375,16 @@ def _live_matches(
     category: Optional[str],
     semester: Optional[str],
     search_query: str,
+    programme: Optional[str],
 ) -> bool:
     if category and notice.get("category") != category:
         return False
     if semester and semester != "All Semesters" and notice.get("semester") != semester:
+        return False
+    programmes = notice.get("programmes")
+    if not isinstance(programmes, list):
+        programmes = programmes_for(notice.get("title", ""))
+    if programme and programme not in programmes:
         return False
     haystack = " ".join(
         str(notice.get(key) or "")
@@ -409,6 +410,7 @@ class handler(BaseHTTPRequestHandler):
             return
         category = params.get("category", [None])[0]
         semester = params.get("semester", [None])[0]
+        programme = params.get("programme", [None])[0]
         search_query = params.get("q", [""])[0].strip()[:120]
         archived_notices, total = archive_notices(
             page=page,
@@ -417,6 +419,7 @@ class handler(BaseHTTPRequestHandler):
             semester=semester,
             search_query=search_query,
             sort_order=sort_order,
+            programme=programme,
         )
         archived_summary = (
             database.get_notice_summary(database.DB_PATH, source_only=True)
@@ -432,6 +435,8 @@ class handler(BaseHTTPRequestHandler):
         if has_archive:
             notices = archived_notices or []
             total_summary = archived_summary
+            category_summary = database.get_category_counts(database.DB_PATH, source_only=True)
+            programme_summary = database.get_programme_counts(database.DB_PATH, source_only=True)
             source = "archive"
             site = "local archive"
             latest_run = database.get_latest_sync_run(database.DB_PATH)
@@ -442,10 +447,15 @@ class handler(BaseHTTPRequestHandler):
         else:
             live_notices, site, error = scrape()
             total_summary = _summarize_notices(live_notices)
+            category_summary = _category_counts(live_notices)
+            programme_summary = {
+                item["name"]: item["count"]
+                for item in _programme_options(live_notices)
+            }
             matches = [
                 notice
                 for notice in live_notices
-                if _live_matches(notice, category, semester, search_query)
+                if _live_matches(notice, category, semester, search_query, programme)
             ]
             if sort_order == "oldest":
                 matches.sort(key=lambda item: item.get("publish_date") or "")
@@ -465,6 +475,14 @@ class handler(BaseHTTPRequestHandler):
             "sort": sort_order,
             "pagination_mode": "server",
             "summary": total_summary,
+            "category_counts": category_summary,
+            "programme_options": [
+                {"name": name, "count": count}
+                for name, count in sorted(
+                    programme_summary.items(),
+                    key=lambda item: item[0].casefold(),
+                )
+            ],
             "source": source,
             "source_site": site,
             "portal": IOST_NOTICES,

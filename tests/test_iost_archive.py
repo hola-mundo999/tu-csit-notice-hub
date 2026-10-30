@@ -113,6 +113,41 @@ def test_notice_summary_counts_full_archive_categories(tmp_path):
     assert general[0]["source_id"] == "4"
 
 
+def test_programme_filter_matches_each_explicit_programme_in_combined_notices(tmp_path):
+    db_path = str(tmp_path / "programmes.db")
+    database.init_db(db_path)
+    samples = [
+        ("1", "B.Sc.CSIT and Bachelor in Information Technology (BIT) II Semester-2082 Exam Schedule"),
+        ("2", "Bachelor in Data Science IV Semester-2081 Exam Result"),
+        ("3", "M.Sc. Statistics I Semester-2082 Result"),
+    ]
+    for source_id, title in samples:
+        item = notice(
+            f"https://iost.tu.edu.np/notices/{source_id}",
+            title,
+        )
+        item["source_id"] = source_id
+        database.save_notice(item, db_path)
+
+    csit, csit_total = database.get_notice_page(db_path=db_path, programme="B.Sc. CSIT")
+    bit, bit_total = database.get_notice_page(db_path=db_path, programme="BIT")
+    data_science, data_science_total = database.get_notice_page(
+        db_path=db_path,
+        programme="Bachelor in Data Science",
+    )
+    assert csit_total == bit_total == 1
+    assert [row["source_id"] for row in csit] == ["1"]
+    assert [row["source_id"] for row in bit] == ["1"]
+    assert data_science_total == 1
+    assert [row["source_id"] for row in data_science] == ["2"]
+    assert database.get_programme_counts(db_path) == {
+        "B.Sc. CSIT": 1,
+        "BIT": 1,
+        "Bachelor in Data Science": 1,
+        "M.Sc. Statistics": 1,
+    }
+
+
 def test_live_notice_api_filters_and_paginates_before_returning_results(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "no-archive.db"))
     live_notices = [
@@ -154,7 +189,7 @@ def test_live_notice_api_filters_and_paginates_before_returning_results(tmp_path
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/api/notices"
             "?q=42+schedule&category=Exam+Routine&semester=2nd+Sem"
-            "&page=1&page_size=1",
+            "&programme=B.Sc.+CSIT&page=1&page_size=1",
             timeout=3,
         )
         assert response.status_code == 200
@@ -170,6 +205,8 @@ def test_live_notice_api_filters_and_paginates_before_returning_results(tmp_path
             "form_fill_ups": 0,
             "general_notices": 0,
         }
+        assert {item["name"] for item in payload["programme_options"]} == {"B.Sc. CSIT"}
+        assert payload["category_counts"]["Exam Routine"] == 2
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/api/notices"
             "?sort=oldest&page=1&page_size=1",
@@ -209,6 +246,44 @@ def test_existing_database_schema_is_migrated_without_data_loss(tmp_path):
     row = database.get_notices(db_path=db_path)[0]
     assert row["title"] == "Existing"
     assert "source_id" in row
+
+
+def test_legacy_notice_metadata_is_reclassified_without_changing_source_content(tmp_path):
+    db_path = str(tmp_path / "metadata-migration.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE notices (
+                id INTEGER PRIMARY KEY,
+                notice_hash TEXT UNIQUE,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL,
+                semester TEXT NOT NULL,
+                publish_date TEXT NOT NULL,
+                url TEXT NOT NULL,
+                is_urgent INTEGER DEFAULT 0,
+                notified INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "INSERT INTO notices (notice_hash, title, category, semester, publish_date, url) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "legacy",
+                "Re-Totaling Result of M.Sc. Statistics I Semester-2082",
+                "Exam Routine",
+                "All Semesters",
+                "2026-10-26",
+                "https://iost.tu.edu.np/notices/42",
+            ),
+        )
+    database.init_db(db_path)
+    row = database.get_notices(db_path=db_path)[0]
+    assert row["category"] == "Results"
+    assert row["semester"] == "1st Sem"
+    assert row["title"] == "Re-Totaling Result of M.Sc. Statistics I Semester-2082"
+    assert row["url"] == "https://iost.tu.edu.np/notices/42"
+    assert row["programmes"] == '["M.Sc. Statistics"]'
 
 
 def test_attachment_metadata_is_saved_and_retrievable(tmp_path):
@@ -355,10 +430,28 @@ def test_notice_api_returns_server_paginated_archive_results(tmp_path, monkeypat
     for source_id in range(1, 4):
         item = notice(
             f"https://iost.tu.edu.np/notices/{source_id}",
-            f"Published notice {source_id}",
+            (
+                "B.Sc.CSIT II Semester-2082 Exam Schedule"
+                if source_id == 1
+                else f"Published notice {source_id}"
+            ),
         )
         item["source_id"] = str(source_id)
         database.save_notice(item, db_path)
+    first_notice = database.get_notice_by_source_url(
+        "https://iost.tu.edu.np/notices/1",
+        db_path,
+    )
+    pdf_path = tmp_path / "first-notice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nfixture")
+    database.save_attachment({
+        "notice_id": first_notice["id"],
+        "source_url": "https://portal.tu.edu.np/notice/1/file.pdf",
+        "original_filename": "first-notice.pdf",
+        "mime_type": "application/pdf",
+        "content_hash": hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+        "stored_file_path": str(pdf_path),
+    }, db_path)
     monkeypatch.setattr(database, "DB_PATH", db_path)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), iost_sync.iost.handler)
@@ -376,6 +469,17 @@ def test_notice_api_returns_server_paginated_archive_results(tmp_path, monkeypat
         assert payload["page"] == 2
         assert len(payload["notices"]) == 1
         assert payload["notices"][0]["title"] == "Published notice 3"
+        assert payload["notices"][0]["attachments"] == []
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/api/notices?page=1&page_size=1",
+            timeout=3,
+        )
+        assert response.status_code == 200
+        notice_with_document = response.json()["notices"][0]
+        assert notice_with_document["source_id"] == "1"
+        assert [item["filename"] for item in notice_with_document["attachments"]] == [
+            "first-notice.pdf"
+        ]
     finally:
         server.shutdown()
         server.server_close()

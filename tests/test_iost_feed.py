@@ -65,6 +65,41 @@ def test_nepali_titles_are_classified_too():
     assert result["category"] == "Results"
 
 
+def test_real_feed_titles_receive_specific_categories():
+    cases = [
+        ("B.Sc.CSIT and Bachelor in Information Technology (BIT) II Semester-2082 Exam Schedule", "Exam Routine"),
+        ("Bachelor in Data Science IV Semester-2081 Exam Result", "Results"),
+        ("Re-Totaling Result of M.Sc. Statistics I Semester-2082", "Results"),
+        ("M.Sc. IV Semester-2080 Make Up Exam Center Notice", "Exam Centre"),
+        ("M.Sc. IV Semester-2081 Exam Form FillUp Notice", "Form Fill Up"),
+        ("B.Sc. पुन: प्रवेश परीक्षाका लागि आवेदन फाराम भर्ने सम्बन्धी सूचना", "Form Fill Up"),
+        ("B.Sc. प्रवेश परीक्षा 2083 को नतिजा प्रकशित गरिएको बारे", "Results"),
+        ("B.Sc. प्रवेश परीक्षा २०८३ को परीक्षा केन्द्रसम्बन्धी अत्यन्त जरुरी सूचना", "Exam Centre"),
+        ("Bachelor in Information Technology (BIT) विषय पठन पाठन हुने सम्पूर्ण अांगिक क्याम्पसमा भर्ना सम्बन्धी जरूरी सूचना", "Admission"),
+        ("परीक्षार्थीहरूका लागि अत्यन्त जरूरी सूचना", "Examination"),
+        ("Academic Calendar of B.Sc.CSIT and Bachelor in Information Technology (BIT) V Semester-2081 Batch", "General Notice"),
+    ]
+    for title, expected in cases:
+        assert notices.classify(title)["category"] == expected, title
+
+
+def test_programmes_are_extracted_only_from_explicit_feed_titles():
+    title = (
+        "B.Sc.CSIT and Bachelor in Information Technology (BIT) "
+        "II Semester-2082 Exam Schedule"
+    )
+    assert notices.classify(title)["programmes"] == ["B.Sc. CSIT", "BIT"]
+    assert notices.classify(
+        "Bachelor in Data Science IV Semester-2081 Exam Result"
+    )["programmes"] == ["Bachelor in Data Science"]
+    assert notices.classify(
+        "M.Sc. Biodiversity and Environmental Management III Semester-2081 Exam Result"
+    )["programmes"] == ["M.Sc. Biodiversity and Environmental Management"]
+    assert notices.classify(
+        "M.Sc. IV Semester-2081 Exam Form FillUp Notice"
+    )["programmes"] == []
+
+
 class _Response:
     def __init__(self, text):
         self.text = text

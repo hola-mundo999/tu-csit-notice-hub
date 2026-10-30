@@ -1,9 +1,12 @@
 import sqlite3
+import json
 from typing import List, Dict, Optional
 import hashlib
 import os
 import datetime as dt
 from contextlib import contextmanager
+
+from notice_metadata import CATEGORY_ORDER, classify, programmes_for
 
 DB_PATH = os.environ.get("NOTICE_DB_PATH", "notices.db")
 
@@ -60,6 +63,7 @@ def init_db(db_path: str = DB_PATH):
             "imported_at": "TEXT",
             "last_synced_at": "TEXT",
             "sync_status": "TEXT",
+            "programmes": "TEXT NOT NULL DEFAULT '[]'",
         }
         for name, column_type in migrations.items():
             if name not in columns:
@@ -121,12 +125,39 @@ def init_db(db_path: str = DB_PATH):
             conn.execute("ALTER TABLE sync_failures ADD COLUMN resolved_at TEXT")
         if "notice_json" not in failure_columns:
             conn.execute("ALTER TABLE sync_failures ADD COLUMN notice_json TEXT")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS metadata_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        if not conn.execute(
+            "SELECT 1 FROM metadata_migrations WHERE version = 1"
+        ).fetchone():
+            rows = conn.execute("SELECT id, title FROM notices").fetchall()
+            for row in rows:
+                metadata = classify(row["title"])
+                conn.execute(
+                    "UPDATE notices SET category = ?, semester = ?, is_urgent = ?, programmes = ? "
+                    "WHERE id = ?",
+                    (
+                        metadata["category"],
+                        metadata["semester"],
+                        int(metadata["urgent"]),
+                        json.dumps(metadata["programmes"], ensure_ascii=False),
+                        row["id"],
+                    ),
+                )
+            conn.execute("INSERT INTO metadata_migrations (version) VALUES (1)")
 
 def save_notice(notice: Dict, db_path: str = DB_PATH) -> bool:
     """Inserts notice if not already present. Returns True if newly added."""
     notice_hash = _notice_hash(notice)
     source_url = notice.get("source_url") or notice.get("url", "")
     source_id = notice.get("source_id")
+    programmes = notice.get("programmes")
+    if not isinstance(programmes, list):
+        programmes = programmes_for(notice.get("title", ""))
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     with _connection(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -134,9 +165,9 @@ def save_notice(notice: Dict, db_path: str = DB_PATH) -> bool:
             INSERT INTO notices (
                 notice_hash, title, category, semester, publish_date, url, is_urgent,
                 source_id, source_url, source_published_at, first_seen_at, last_seen_at,
-                imported_at, last_synced_at, sync_status
+                imported_at, last_synced_at, sync_status, programmes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING
         """, (
             notice_hash,
@@ -154,6 +185,7 @@ def save_notice(notice: Dict, db_path: str = DB_PATH) -> bool:
             now,
             now,
             notice.get("sync_status", "imported"),
+            json.dumps(programmes, ensure_ascii=False),
         ))
         return cursor.rowcount == 1
 
@@ -192,23 +224,66 @@ def get_notice_summary(db_path: str = DB_PATH, source_only: bool = False) -> Dic
             COUNT(*) AS total,
             SUM(CASE WHEN category = 'Exam Routine' THEN 1 ELSE 0 END) AS exam_routines,
             SUM(CASE WHEN category = 'Results' THEN 1 ELSE 0 END) AS results,
-            SUM(CASE WHEN category = 'Form Fill Up' THEN 1 ELSE 0 END) AS form_fill_ups
+            SUM(CASE WHEN category = 'Form Fill Up' THEN 1 ELSE 0 END) AS form_fill_ups,
+            SUM(CASE WHEN category IN ('General Notice', 'General') THEN 1 ELSE 0 END) AS general_notices
         FROM notices{where}
         """,
         params,
     ).fetchone()
     conn.close()
-    total = row["total"] or 0
     exams = row["exam_routines"] or 0
     results = row["results"] or 0
     forms = row["form_fill_ups"] or 0
+    general = row["general_notices"] or 0
     return {
-        "total": total,
+        "total": row["total"] or 0,
         "exam_routines": exams,
         "results": results,
         "form_fill_ups": forms,
-        "general_notices": total - exams - results - forms,
+        "general_notices": general,
     }
+
+
+def get_category_counts(db_path: str = DB_PATH, source_only: bool = False) -> Dict[str, int]:
+    conn = _connect(db_path)
+    where = " WHERE source_url LIKE ? OR url LIKE ?" if source_only else ""
+    params = (
+        ("https://iost.tu.edu.np/notices/%", "https://iost.tu.edu.np/notices/%")
+        if source_only else ()
+    )
+    counts = {category: 0 for category in CATEGORY_ORDER}
+    for row in conn.execute(
+        f"SELECT category, COUNT(*) AS count FROM notices{where} GROUP BY category",
+        params,
+    ):
+        category = row["category"]
+        if category == "General":
+            category = "General Notice"
+        counts[category] = counts.get(category, 0) + row["count"]
+    conn.close()
+    return counts
+
+
+def get_programme_counts(db_path: str = DB_PATH, source_only: bool = False) -> Dict[str, int]:
+    conn = _connect(db_path)
+    where = " WHERE source_url LIKE ? OR url LIKE ?" if source_only else ""
+    params = (
+        ("https://iost.tu.edu.np/notices/%", "https://iost.tu.edu.np/notices/%")
+        if source_only else ()
+    )
+    counts: Dict[str, int] = {}
+    for row in conn.execute(f"SELECT title, programmes FROM notices{where}", params):
+        try:
+            programmes = json.loads(row["programmes"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            programmes = programmes_for(row["title"])
+        if not isinstance(programmes, list):
+            programmes = programmes_for(row["title"])
+        for programme in programmes:
+            if isinstance(programme, str):
+                counts[programme] = counts.get(programme, 0) + 1
+    conn.close()
+    return counts
 
 
 def get_notice_page(
@@ -220,6 +295,7 @@ def get_notice_page(
     page: int = 1,
     page_size: int = 24,
     sort_order: str = "newest",
+    programme: Optional[str] = None,
 ) -> tuple[List[Dict], int]:
     conn = _connect(db_path)
     where = ["1=1"]
@@ -243,6 +319,11 @@ def get_notice_page(
     if semester and semester != "All Semesters":
         where.append("(semester = ? OR semester = 'All')")
         params.append(semester)
+
+    if programme:
+        escaped_programme = programme.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        where.append("programmes LIKE ? ESCAPE '!'")
+        params.append(f'%"{escaped_programme}"%')
 
     if search_query:
         for term in search_query.split():

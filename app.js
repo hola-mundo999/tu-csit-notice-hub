@@ -11,6 +11,7 @@ const dom = {
   sync: $("#sync-state"),
   search: $("#search"),
   searchForm: $("#search-form"),
+  programme: $("#programme"),
   semester: $("#semester"),
   sort: $("#sort-order"),
   pageSize: $("#page-size"),
@@ -44,7 +45,7 @@ const dom = {
   toast: $("#toast"),
 };
 
-const CACHE_KEY = "tu-notice-hub:v2";
+const CACHE_KEY = "tu-notice-hub:v3";
 const PAGE_SIZES = new Set([12, 24, 48]);
 const CATEGORY_CLASS = {
   "Exam Routine": "exam",
@@ -66,11 +67,14 @@ const state = {
   source: "loading",
   fetchedAt: null,
   syncStatus: null,
+  categoryCounts: {},
+  programmeOptions: [],
   error: null,
   stale: false,
   site: "",
   loading: false,
   query: "",
+  programme: "B.Sc. CSIT",
   semester: "all",
   category: "all",
   sort: "newest",
@@ -85,7 +89,13 @@ function readCache() {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const cached = JSON.parse(raw);
-    return Array.isArray(cached.notices) ? cached : null;
+    return Array.isArray(cached.notices) &&
+      cached.notices.every((notice) => Array.isArray(notice.programmes)) &&
+      Array.isArray(cached.programme_options) &&
+      cached.category_counts &&
+      typeof cached.category_counts === "object"
+      ? cached
+      : null;
   } catch {
     return null;
   }
@@ -178,7 +188,10 @@ async function fetchFeed({ force = false, silent = false } = {}) {
   state.loading = true;
   dom.refresh.disabled = true;
   dom.refresh.classList.add("is-busy");
-  if (!state.notices.length) dom.feed.setAttribute("aria-busy", "true");
+  if (!state.notices.length) {
+    dom.feed.setAttribute("aria-busy", "true");
+    renderFeed();
+  }
 
   const params = new URLSearchParams({
     page: String(state.page),
@@ -186,6 +199,7 @@ async function fetchFeed({ force = false, silent = false } = {}) {
     sort: state.sort,
   });
   if (state.category !== "all") params.set("category", state.category);
+  if (state.programme !== "all") params.set("programme", state.programme);
   if (state.semester !== "all") params.set("semester", state.semester);
   if (state.query) params.set("q", state.query);
 
@@ -219,6 +233,11 @@ async function fetchFeed({ force = false, silent = false } = {}) {
     state.total = Number.isSafeInteger(payload.total) ? payload.total : payload.notices.length;
     state.serverPaginated = payload.pagination_mode === "server" || state.source === "archive";
     state.summary = normalizeSummary(payload.summary, payload.notices, state.source);
+    state.categoryCounts = payload.category_counts || {};
+    state.programmeOptions = Array.isArray(payload.programme_options)
+      ? payload.programme_options.filter((item) => item && typeof item.name === "string")
+      : [];
+    renderProgrammeOptions();
 
     const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
     if (state.page > pages) {
@@ -234,6 +253,8 @@ async function fetchFeed({ force = false, silent = false } = {}) {
       sync_status: state.syncStatus,
       total: state.total,
       summary: state.summary,
+      category_counts: state.categoryCounts,
+      programme_options: state.programmeOptions,
     });
     render();
     if (force) toast("Notice feed checked.");
@@ -254,6 +275,9 @@ async function fetchFeed({ force = false, silent = false } = {}) {
         state.total = cached.total || cached.notices.length;
         state.summary = normalizeSummary(cached.summary, cached.notices, cached.source);
         state.serverPaginated = cached.source === "archive";
+        state.categoryCounts = cached.category_counts || {};
+        state.programmeOptions = Array.isArray(cached.programme_options) ? cached.programme_options : [];
+        renderProgrammeOptions();
       } else {
         state.source = "unavailable";
       }
@@ -280,6 +304,8 @@ function locallyFilteredNotices() {
   const query = state.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return state.notices.filter((notice) => {
     if (state.category !== "all" && notice.category !== state.category) return false;
+    if (state.programme !== "all" &&
+        !(Array.isArray(notice.programmes) && notice.programmes.includes(state.programme))) return false;
     if (state.semester !== "all" &&
         notice.semester !== state.semester &&
         notice.semester !== "All Semesters") return false;
@@ -311,11 +337,8 @@ function renderStats() {
 function renderCategories() {
   const summary = state.summary || {};
   const counts = {
-    all: summary.total,
-    "Exam Routine": summary.exam_routines,
-    Results: summary.results,
-    "Form Fill Up": summary.form_fill_ups,
-    "General Notice": summary.general_notices,
+    all: state.categoryCounts.all ?? summary.total,
+    ...state.categoryCounts,
   };
   for (const chip of $$(".category-chip", dom.chips)) {
     const category = chip.dataset.category;
@@ -325,6 +348,23 @@ function renderCategories() {
     chip.classList.toggle("is-active", active);
     chip.setAttribute("aria-pressed", String(active));
   }
+}
+
+function renderProgrammeOptions() {
+  const selected = state.programme;
+  const counts = new Map(state.programmeOptions.map((item) => [item.name, item.count]));
+  const names = new Set(["B.Sc. CSIT", ...counts.keys()]);
+  const options = [new Option("All programmes", "all")];
+  for (const name of [...names].sort((a, b) => a.localeCompare(b))) {
+    const count = counts.get(name);
+    options.push(new Option(
+      Number.isSafeInteger(count) ? `${name} (${count})` : name,
+      name,
+    ));
+  }
+  dom.programme.replaceChildren(...options);
+  dom.programme.value = selected === "all" || names.has(selected) ? selected : "B.Sc. CSIT";
+  state.programme = dom.programme.value;
 }
 
 function renderStatus() {
@@ -354,21 +394,27 @@ function renderStatus() {
 }
 
 function renderBanner() {
+  const messages = [];
   if (state.stale) {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent = "The latest request failed. The notices shown are from the last successful response.";
-  } else if (state.source === "live") {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent = "This is a live preview of recent official notices. Durable archive storage and scheduled synchronization are not configured for this deployment.";
-  } else if (state.source === "unavailable") {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent = state.error
-      ? `Could not load official IoST notices. ${state.error}`
-      : "The official IoST source is unavailable. Try refreshing later.";
-  } else {
-    dom.banner.hidden = true;
-    dom.bannerText.textContent = "";
+    messages.push("The latest request failed. The notices shown are from the last successful response.");
   }
+  if (state.source === "live") {
+    messages.push(
+      "This is a live preview of recent official notices, not a complete historical archive. " +
+      "Durable archive storage and scheduled synchronization are not configured for this deployment.",
+    );
+  } else if (state.source === "archive") {
+    messages.push(
+      "Persistent archive storage and scheduled synchronization are not configured for this deployment; " +
+      "historical completeness is not guaranteed.",
+    );
+  } else if (state.source === "unavailable") {
+    messages.push(state.error
+      ? `Could not load official IoST notices. ${state.error}`
+      : "The official IoST source is unavailable. Try refreshing later.");
+  }
+  dom.banner.hidden = messages.length === 0;
+  dom.bannerText.textContent = messages.join(" ");
 }
 
 function addTag(parent, label, variant = "") {
@@ -546,7 +592,9 @@ function renderFeed() {
     ? localResults
     : localResults.slice(start, start + state.pageSize);
   const end = total ? Math.min(start + visible.length, total) : 0;
-  const hasFilters = Boolean(state.query || state.semester !== "all" || state.category !== "all");
+  const hasFilters = Boolean(
+    state.query || state.programme !== "all" || state.semester !== "all" || state.category !== "all",
+  );
 
   dom.reset.hidden = !hasFilters;
   dom.empty.hidden = visible.length > 0 || state.loading;
@@ -605,11 +653,13 @@ function changeFilters() {
 
 function resetFilters() {
   state.query = "";
+  state.programme = "all";
   state.category = "all";
   state.semester = "all";
   state.sort = "newest";
   state.page = 1;
   dom.search.value = "";
+  dom.programme.value = "all";
   dom.semester.value = "all";
   dom.sort.value = "newest";
   render();
@@ -617,14 +667,23 @@ function resetFilters() {
 }
 
 let documentPreviewTimer = null;
+let documentPreviewToken = 0;
 function showDocument(button) {
   const url = button.dataset.previewUrl;
-  if (!url || (!url.startsWith("/api/document?") && !isOfficialUrl(url))) {
+  const localPreview = isLocalDocumentUrl(url, "inline");
+  if (!url || (!localPreview && !isOfficialUrl(url))) {
     toast("This document link is not available.");
     return;
   }
   const filename = button.dataset.filename || "Notice PDF";
   const downloadUrl = button.dataset.downloadUrl || url;
+  const localDownload = isLocalDocumentUrl(downloadUrl, "attachment");
+  if (!localDownload && !isOfficialUrl(downloadUrl)) {
+    toast("This document link is not available.");
+    return;
+  }
+  const token = ++documentPreviewToken;
+  const isCurrentPreview = () => token === documentPreviewToken && dom.dialog.open;
   dom.documentTitle.textContent = filename;
   dom.documentStatus.hidden = false;
   dom.documentStatus.textContent = "Loading document preview…";
@@ -632,9 +691,12 @@ function showDocument(button) {
   dom.documentFrame.src = "about:blank";
   dom.documentDownload.href = downloadUrl;
   dom.documentDownload.download = filename;
-  dom.documentOriginal.href = button.dataset.noticeUrl || "https://iost.tu.edu.np/notices";
+  const noticeUrl = button.dataset.noticeUrl;
+  dom.documentOriginal.hidden = !isOfficialUrl(noticeUrl);
+  if (isOfficialUrl(noticeUrl)) dom.documentOriginal.href = noticeUrl;
   dom.documentOpen.href = url;
   dom.documentFrame.onload = () => {
+    if (!isCurrentPreview()) return;
     if (dom.documentFrame.src.endsWith("about:blank")) return;
     window.clearTimeout(documentPreviewTimer);
     dom.documentStatus.hidden = false;
@@ -642,34 +704,48 @@ function showDocument(button) {
     dom.documentFrame.hidden = false;
   };
   dom.documentFrame.onerror = () => {
+    if (!isCurrentPreview()) return;
     window.clearTimeout(documentPreviewTimer);
     dom.documentStatus.textContent = "The PDF preview could not be loaded. Try downloading it or opening the file in a new tab.";
   };
   if (!dom.dialog.open) dom.dialog.showModal();
   const loadFrame = () => {
-    if (!dom.dialog.open) return;
+    if (!isCurrentPreview()) return;
     dom.documentFrame.src = url;
     documentPreviewTimer = window.setTimeout(() => {
-      if (dom.documentFrame.hidden) {
+      if (isCurrentPreview() && dom.documentFrame.hidden) {
         dom.documentStatus.textContent = "The preview is taking too long. Download the file or open it in a new tab.";
       }
     }, 15_000);
   };
-  if (url.startsWith("/api/document?")) {
+  if (localPreview) {
     fetch(url, { headers: { Range: "bytes=0-4" } })
       .then(async (response) => {
         const contentType = response.headers.get("Content-Type") || "";
-        const signature = new TextDecoder().decode(await response.arrayBuffer());
-        if (!response.ok || !contentType.toLowerCase().includes("application/pdf") ||
-            !signature.startsWith("%PDF-")) {
+        if (!response.ok || !contentType.toLowerCase().includes("application/pdf")) {
           throw new Error("The archived PDF is unavailable.");
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("The archived PDF could not be read.");
+        let bytes = new Uint8Array();
+        while (bytes.length < 5) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const merged = new Uint8Array(bytes.length + value.length);
+          merged.set(bytes);
+          merged.set(value, bytes.length);
+          bytes = merged;
+        }
+        await reader.cancel();
+        if (new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") {
+          throw new Error("The archived file is not a valid PDF.");
         }
       })
       .then(() => {
         loadFrame();
       })
       .catch(() => {
-        if (dom.dialog.open) {
+        if (isCurrentPreview()) {
           dom.documentStatus.textContent = "The archived PDF could not be loaded. Try downloading it or opening the file in a new tab.";
         }
       });
@@ -702,6 +778,10 @@ dom.search.addEventListener("input", () => {
 });
 dom.semester.addEventListener("change", () => {
   state.semester = dom.semester.value;
+  changeFilters();
+});
+dom.programme.addEventListener("change", () => {
+  state.programme = dom.programme.value;
   changeFilters();
 });
 dom.sort.addEventListener("change", () => {
@@ -743,6 +823,7 @@ dom.feed.addEventListener("click", (event) => {
 });
 dom.documentClose.addEventListener("click", () => dom.dialog.close());
 dom.dialog.addEventListener("close", () => {
+  documentPreviewToken += 1;
   window.clearTimeout(documentPreviewTimer);
   dom.documentFrame.src = "about:blank";
   dom.documentFrame.hidden = true;
@@ -785,6 +866,9 @@ function boot() {
     state.total = Number.isSafeInteger(cached.total) ? cached.total : cached.notices.length;
     state.summary = normalizeSummary(cached.summary, cached.notices, cached.source);
     state.serverPaginated = cached.source === "archive";
+    state.categoryCounts = cached.category_counts || {};
+    state.programmeOptions = Array.isArray(cached.programme_options) ? cached.programme_options : [];
+    renderProgrammeOptions();
     render();
   }
   fetchFeed({ silent: true });
