@@ -47,7 +47,13 @@ def _local_dependencies(entrypoint):
 
 
 def _matches_include(pattern, relative_path):
-    return fnmatch.fnmatch(relative_path, pattern)
+    if "{" in pattern and "}" in pattern:
+        prefix, alternatives = pattern.split("{", 1)
+        alternatives, suffix = alternatives.split("}", 1)
+        patterns = [f"{prefix}{alternative}{suffix}" for alternative in alternatives.split(",")]
+    else:
+        patterns = [pattern]
+    return any(fnmatch.fnmatch(relative_path, candidate) for candidate in patterns)
 
 
 def test_every_api_entrypoint_includes_its_transitive_local_modules():

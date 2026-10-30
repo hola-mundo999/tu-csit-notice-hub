@@ -5,11 +5,11 @@
   "functions": {
     "api/notices.py": {
       "maxDuration": 30,
-      "includeFiles": ["database.py", "notice_metadata.py"]
+      "includeFiles": "{database.py,notice_metadata.py}"
     },
     "api/document.py": {
       "maxDuration": 30,
-      "includeFiles": ["database.py", "notice_metadata.py"]
+      "includeFiles": "{database.py,notice_metadata.py}"
     }
   }
 }
