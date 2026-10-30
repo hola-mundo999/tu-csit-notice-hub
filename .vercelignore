@@ -5,7 +5,6 @@ venv/
 .venv/
 *.pyc
 app.py
-database.py
 notifier.py
 scraper.py
 requirements-streamlit.txt

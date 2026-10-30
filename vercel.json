@@ -4,10 +4,12 @@
   "cleanUrls": true,
   "functions": {
     "api/notices.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "database.py"
     },
     "api/document.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "database.py"
     }
   }
 }
