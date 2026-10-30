@@ -19,6 +19,7 @@ const dom = {
   reset: $("#reset"),
   banner: $("#banner"),
   bannerText: $("#banner-text"),
+  archiveNote: $("#archive-note"),
   resultLine: $("#result-line"),
   feed: $("#feed"),
   pagination: $("#pagination"),
@@ -398,23 +399,24 @@ function renderBanner() {
   if (state.stale) {
     messages.push("The latest request failed. The notices shown are from the last successful response.");
   }
-  if (state.source === "live") {
-    messages.push(
-      "This is a live preview of recent official notices, not a complete historical archive. " +
-      "Durable archive storage and scheduled synchronization are not configured for this deployment.",
-    );
-  } else if (state.source === "archive") {
-    messages.push(
-      "Persistent archive storage and scheduled synchronization are not configured for this deployment; " +
-      "historical completeness is not guaranteed.",
-    );
-  } else if (state.source === "unavailable") {
+  if (state.source === "unavailable") {
     messages.push(state.error
       ? `Could not load official IoST notices. ${state.error}`
       : "The official IoST source is unavailable. Try refreshing later.");
   }
   dom.banner.hidden = messages.length === 0;
   dom.bannerText.textContent = messages.join(" ");
+
+  if (state.source === "live") {
+    dom.archiveNote.textContent =
+      "Recent notices preview · Full historical archive and automatic synchronization are not yet enabled.";
+  } else if (state.source === "archive") {
+    dom.archiveNote.textContent =
+      "Archive retention depends on deployment storage · Historical completeness and automatic synchronization are not guaranteed.";
+  } else {
+    dom.archiveNote.textContent = "";
+  }
+  dom.archiveNote.hidden = !dom.archiveNote.textContent;
 }
 
 function addTag(parent, label, variant = "") {
