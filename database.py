@@ -176,6 +176,41 @@ def get_notices(
     return records
 
 
+def get_notice_summary(db_path: str = DB_PATH, source_only: bool = False) -> Dict[str, int]:
+    conn = _connect(db_path)
+    where = ""
+    params = ()
+    if source_only:
+        where = " WHERE source_url LIKE ? OR url LIKE ?"
+        params = (
+            "https://iost.tu.edu.np/notices/%",
+            "https://iost.tu.edu.np/notices/%",
+        )
+    row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN category = 'Exam Routine' THEN 1 ELSE 0 END) AS exam_routines,
+            SUM(CASE WHEN category = 'Results' THEN 1 ELSE 0 END) AS results,
+            SUM(CASE WHEN category = 'Form Fill Up' THEN 1 ELSE 0 END) AS form_fill_ups
+        FROM notices{where}
+        """,
+        params,
+    ).fetchone()
+    conn.close()
+    total = row["total"] or 0
+    exams = row["exam_routines"] or 0
+    results = row["results"] or 0
+    forms = row["form_fill_ups"] or 0
+    return {
+        "total": total,
+        "exam_routines": exams,
+        "results": results,
+        "form_fill_ups": forms,
+        "general_notices": total - exams - results - forms,
+    }
+
+
 def get_notice_page(
     category: Optional[str] = None,
     semester: Optional[str] = None,
@@ -184,6 +219,7 @@ def get_notice_page(
     source_only: bool = False,
     page: int = 1,
     page_size: int = 24,
+    sort_order: str = "newest",
 ) -> tuple[List[Dict], int]:
     conn = _connect(db_path)
     where = ["1=1"]
@@ -197,16 +233,23 @@ def get_notice_page(
         ))
 
     if category and category != "All":
-        where.append("category = ?")
-        params.append(category)
+        if category == "General Notice":
+            where.append("(category = ? OR category = 'General')")
+            params.append(category)
+        else:
+            where.append("category = ?")
+            params.append(category)
 
     if semester and semester != "All Semesters":
         where.append("(semester = ? OR semester = 'All')")
         params.append(semester)
 
     if search_query:
-        where.append("(title LIKE ? OR category LIKE ? OR semester LIKE ?)")
-        params.extend((f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"))
+        for term in search_query.split():
+            where.append(
+                "(title LIKE ? OR category LIKE ? OR semester LIKE ? OR source_id LIKE ?)"
+            )
+            params.extend((f"%{term}%",) * 4)
 
     where_sql = " AND ".join(where)
     total = conn.execute(
@@ -214,9 +257,15 @@ def get_notice_page(
         params,
     ).fetchone()[0]
     offset = max(0, page - 1) * page_size
+    order = (
+        "COALESCE(source_published_at, publish_date) ASC, "
+        "COALESCE(first_seen_at, '') DESC, id DESC"
+        if sort_order == "oldest"
+        else "COALESCE(source_published_at, publish_date) DESC, "
+        "COALESCE(first_seen_at, '9999') ASC, id ASC"
+    )
     rows = conn.execute(
-        f"SELECT * FROM notices WHERE {where_sql} "
-        "ORDER BY COALESCE(source_published_at, publish_date) DESC, id DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM notices WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         (*params, page_size, offset),
     ).fetchall()
     results = [dict(row) for row in rows]

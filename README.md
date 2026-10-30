@@ -48,7 +48,7 @@ Before deploying the complete archival service, provide persistent database and 
 
 ## API and archive behavior
 
-- `GET /api/notices` reads archived notices when a database is configured and populated; otherwise it fetches the latest official listing pages. Archive requests are paginated (24 per page by default) and support `page`, `page_size`, `category`, `semester`, and `q` parameters.
+- `GET /api/notices` reads archived notices when a database is configured and populated; otherwise it fetches a bounded recent preview from the official listing. Both modes apply category, semester, source-ID/title search, sort order, page, and page-size parameters before returning results. Responses include category totals for the available archive or preview dataset. Supported sort values are `newest` (the default official order) and `oldest`; page sizes are capped at 100.
 - `GET /api/document?attachment_id=<id>&disposition=inline|attachment` serves a validated local attachment, supports byte ranges, and preserves the original filename.
 - Source IDs and canonical source URLs are unique in SQLite. Metadata is insert-only so an upstream title change cannot silently rewrite the archived record.
 - Attachment downloads are restricted to HTTPS on official IoST/TU hosts, capped at 25 MB, checked against MIME type and file signature, and written atomically.

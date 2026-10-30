@@ -305,6 +305,7 @@ def archive_notices(
     category: Optional[str] = None,
     semester: Optional[str] = None,
     search_query: Optional[str] = None,
+    sort_order: str = "newest",
 ) -> Tuple[Optional[List[Dict[str, Any]]], int]:
     if not Path(database.DB_PATH).is_file():
         return None, 0
@@ -317,6 +318,7 @@ def archive_notices(
         category=category,
         semester=semester,
         search_query=search_query,
+        sort_order=sort_order,
     )
     if not records:
         return [], total
@@ -354,6 +356,42 @@ def archive_notices(
     return archived, total
 
 
+def _summarize_notices(notices: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = {
+        "total": len(notices),
+        "exam_routines": 0,
+        "results": 0,
+        "form_fill_ups": 0,
+        "general_notices": 0,
+    }
+    categories = {
+        "Exam Routine": "exam_routines",
+        "Results": "results",
+        "Form Fill Up": "form_fill_ups",
+    }
+    for notice in notices:
+        key = categories.get(notice.get("category"))
+        counts[key or "general_notices"] += 1
+    return counts
+
+
+def _live_matches(
+    notice: Dict[str, Any],
+    category: Optional[str],
+    semester: Optional[str],
+    search_query: str,
+) -> bool:
+    if category and notice.get("category") != category:
+        return False
+    if semester and semester != "All Semesters" and notice.get("semester") != semester:
+        return False
+    haystack = " ".join(
+        str(notice.get(key) or "")
+        for key in ("title", "source_id", "category", "semester", "url")
+    ).casefold()
+    return all(term.casefold() in haystack for term in search_query.split())
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (Vercel entrypoint)
         error = None
@@ -365,6 +403,10 @@ class handler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error(400, "page and page_size must be integers.")
             return
+        sort_order = params.get("sort", ["newest"])[0]
+        if sort_order not in {"newest", "oldest"}:
+            self.send_error(400, "sort must be newest or oldest.")
+            return
         category = params.get("category", [None])[0]
         semester = params.get("semester", [None])[0]
         search_query = params.get("q", [""])[0].strip()[:120]
@@ -374,27 +416,55 @@ class handler(BaseHTTPRequestHandler):
             category=category,
             semester=semester,
             search_query=search_query,
+            sort_order=sort_order,
         )
-        notices = archived_notices or []
-        source = "archive" if notices else "live"
-        site = "local archive" if notices else ""
+        archived_summary = (
+            database.get_notice_summary(database.DB_PATH, source_only=True)
+            if archived_notices is not None
+            else None
+        )
+        has_archive = bool(archived_summary and archived_summary["total"])
+        notices: List[Dict[str, Any]] = []
+        source = "live"
+        site = ""
         latest_run = None
         last_success = None
-        has_filters = bool(category or semester or search_query)
-        if archived_notices is None or (total == 0 and not has_filters):
-            notices, site, error = scrape()
-            total = len(notices)
-            source = "live" if notices else "unavailable"
-        else:
+        if has_archive:
+            notices = archived_notices or []
+            total_summary = archived_summary
             source = "archive"
+            site = "local archive"
             latest_run = database.get_latest_sync_run(database.DB_PATH)
-            last_success = database.get_latest_sync_run(database.DB_PATH, status="completed")
+            last_success = database.get_latest_sync_run(
+                database.DB_PATH,
+                status="completed",
+            )
+        else:
+            live_notices, site, error = scrape()
+            total_summary = _summarize_notices(live_notices)
+            matches = [
+                notice
+                for notice in live_notices
+                if _live_matches(notice, category, semester, search_query)
+            ]
+            if sort_order == "oldest":
+                matches.sort(key=lambda item: item.get("publish_date") or "")
+            total = len(matches)
+            start = (page - 1) * page_size
+            notices = matches[start:start + page_size]
+            source = "live" if live_notices else "unavailable"
+
+        if source == "archive":
+            total_summary = total_summary or _summarize_notices([])
 
         payload = {
             "notices": notices,
             "total": total,
             "page": page,
             "page_size": page_size,
+            "sort": sort_order,
+            "pagination_mode": "server",
+            "summary": total_summary,
             "source": source,
             "source_site": site,
             "portal": IOST_NOTICES,

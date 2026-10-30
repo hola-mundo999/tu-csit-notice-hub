@@ -37,7 +37,8 @@ def test_source_id_and_url_uniqueness_preserve_the_first_archive(tmp_path):
 def test_notice_page_query_limits_rows_but_returns_total_and_searches_metadata(tmp_path):
     db_path = str(tmp_path / "pages.db")
     database.init_db(db_path)
-    for source_id in range(1, 6):
+    source_ids = [1, 2, 42, 4, 5]
+    for source_id in source_ids:
         item = notice(
             f"https://iost.tu.edu.np/notices/{source_id}",
             f"Published notice {source_id}",
@@ -47,13 +48,26 @@ def test_notice_page_query_limits_rows_but_returns_total_and_searches_metadata(t
     page, total = database.get_notice_page(db_path=db_path, source_only=True, page=2, page_size=2)
     assert total == 5
     assert len(page) == 2
+    newest, _ = database.get_notice_page(
+        db_path=db_path,
+        source_only=True,
+        page_size=5,
+    )
+    oldest, _ = database.get_notice_page(
+        db_path=db_path,
+        source_only=True,
+        page_size=5,
+        sort_order="oldest",
+    )
+    assert [row["source_id"] for row in newest] == ["1", "2", "42", "4", "5"]
+    assert [row["source_id"] for row in oldest] == ["5", "4", "42", "2", "1"]
     matched, matching_total = database.get_notice_page(
         db_path=db_path,
         source_only=True,
         search_query="42",
     )
-    assert matching_total == 0
-    assert matched == []
+    assert matching_total == 1
+    assert matched[0]["source_id"] == "42"
     matched, matching_total = database.get_notice_page(
         db_path=db_path,
         source_only=True,
@@ -61,6 +75,113 @@ def test_notice_page_query_limits_rows_but_returns_total_and_searches_metadata(t
     )
     assert matching_total == 5
     assert len(matched) == 5
+    matched, matching_total = database.get_notice_page(
+        db_path=db_path,
+        source_only=True,
+        search_query="Published notice 42",
+    )
+    assert matching_total == 1
+    assert matched[0]["source_id"] == "42"
+
+
+def test_notice_summary_counts_full_archive_categories(tmp_path):
+    db_path = str(tmp_path / "summary.db")
+    database.init_db(db_path)
+    categories = ["Exam Routine", "Results", "Form Fill Up", "General", "Results"]
+    for source_id, category in enumerate(categories, start=1):
+        item = notice(
+            f"https://iost.tu.edu.np/notices/{source_id}",
+            f"Published notice {source_id}",
+        )
+        item["source_id"] = str(source_id)
+        item["category"] = category
+        database.save_notice(item, db_path)
+
+    assert database.get_notice_summary(db_path, source_only=True) == {
+        "total": 5,
+        "exam_routines": 1,
+        "results": 2,
+        "form_fill_ups": 1,
+        "general_notices": 1,
+    }
+    general, total = database.get_notice_page(
+        db_path=db_path,
+        source_only=True,
+        category="General Notice",
+    )
+    assert total == 1
+    assert general[0]["source_id"] == "4"
+
+
+def test_live_notice_api_filters_and_paginates_before_returning_results(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "no-archive.db"))
+    live_notices = [
+        {
+            **notice("https://iost.tu.edu.np/notices/42", "B.Sc.CSIT exam schedule"),
+            "source_id": "42",
+            "category": "Exam Routine",
+            "semester": "2nd Sem",
+            "publish_date": "2026-10-26",
+            "urgent": True,
+        },
+        {
+            **notice("https://iost.tu.edu.np/notices/41", "M.Sc. results"),
+            "source_id": "41",
+            "category": "Results",
+            "semester": "1st Sem",
+            "publish_date": "2026-10-14",
+            "urgent": True,
+        },
+        {
+            **notice("https://iost.tu.edu.np/notices/40", "General exam schedule"),
+            "source_id": "40",
+            "category": "Exam Routine",
+            "semester": "2nd Sem",
+            "publish_date": "2026-10-09",
+            "urgent": False,
+        },
+    ]
+    monkeypatch.setattr(
+        iost_sync.iost,
+        "scrape",
+        lambda: (live_notices, "iost.tu.edu.np", None),
+    )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), iost_sync.iost.handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/api/notices"
+            "?q=42+schedule&category=Exam+Routine&semester=2nd+Sem"
+            "&page=1&page_size=1",
+            timeout=3,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source"] == "live"
+        assert payload["pagination_mode"] == "server"
+        assert payload["total"] == 1
+        assert [item["source_id"] for item in payload["notices"]] == ["42"]
+        assert payload["summary"] == {
+            "total": 3,
+            "exam_routines": 2,
+            "results": 1,
+            "form_fill_ups": 0,
+            "general_notices": 0,
+        }
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/api/notices"
+            "?sort=oldest&page=1&page_size=1",
+            timeout=3,
+        )
+        assert response.status_code == 200
+        assert response.json()["notices"][0]["source_id"] == "40"
+        assert response.json()["total"] == 3
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
 def test_existing_database_schema_is_migrated_without_data_loss(tmp_path):
@@ -254,7 +375,7 @@ def test_notice_api_returns_server_paginated_archive_results(tmp_path, monkeypat
         assert payload["total"] == 3
         assert payload["page"] == 2
         assert len(payload["notices"]) == 1
-        assert payload["notices"][0]["title"] == "Published notice 1"
+        assert payload["notices"][0]["title"] == "Published notice 3"
     finally:
         server.shutdown()
         server.server_close()
