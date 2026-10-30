@@ -94,6 +94,39 @@ def test_scrape_reads_the_current_site_first(monkeypatch):
     assert found[0]["publish_date"] >= found[-1]["publish_date"]
 
 
+def test_scrape_preserves_source_order_for_notices_with_the_same_date(monkeypatch):
+    first_page = """
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-26</span></div>
+        <div class="detail"><a href="/notices/15953"><h5>B.Sc.CSIT exam schedule</h5></a></div>
+      </div>
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-26</span></div>
+        <div class="detail"><a href="/notices/15952"><h5>Re-totaling result</h5></a></div>
+      </div>
+      <ul class="pagination"><li><a class="page-link" href="?cursor=older">Next »</a></li></ul>
+    """
+    second_page = """
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-14</span></div>
+        <div class="detail"><a href="/notices/15925"><h5>Older exam result</h5></a></div>
+      </div>
+    """
+
+    def fake_get(url, **_kwargs):
+        if "cursor=older" in url:
+            return _Response(second_page)
+        if url == notices.IOST_NOTICES:
+            return _Response(first_page)
+        raise AssertionError(f"Unexpected listing URL: {url}")
+
+    monkeypatch.setattr(notices.requests, "get", fake_get)
+
+    found = notices.scrape_iost(max_pages=2)
+
+    assert [item["source_id"] for item in found] == ["15953", "15952", "15925"]
+
+
 def test_scrape_does_not_substitute_the_stale_legacy_site(monkeypatch):
     def fake_get(url, **_kwargs):
         if "iost.tu.edu.np" in url:

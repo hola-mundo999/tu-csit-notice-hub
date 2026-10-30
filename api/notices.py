@@ -285,7 +285,6 @@ def scrape_iost(max_pages: int = IOST_PAGES) -> List[Dict[str, Any]]:
                     next_link = candidate
                 break
         url = next_link
-    notices.sort(key=lambda item: (item["publish_date"] or "", item["title"]), reverse=True)
     return notices
 
 
