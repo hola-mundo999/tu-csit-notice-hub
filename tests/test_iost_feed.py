@@ -7,6 +7,7 @@ so parsing the new markup is what keeps the feed from going stale again.
 import importlib.util
 import pathlib
 
+import requests
 from bs4 import BeautifulSoup
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -64,18 +65,59 @@ def test_nepali_titles_are_classified_too():
     assert result["category"] == "Results"
 
 
+def test_real_feed_titles_receive_specific_categories():
+    cases = [
+        ("B.Sc.CSIT and Bachelor in Information Technology (BIT) II Semester-2082 Exam Schedule", "Exam Routine"),
+        ("Bachelor in Data Science IV Semester-2081 Exam Result", "Results"),
+        ("Re-Totaling Result of M.Sc. Statistics I Semester-2082", "Results"),
+        ("M.Sc. IV Semester-2080 Make Up Exam Center Notice", "Exam Centre"),
+        ("M.Sc. IV Semester-2081 Exam Form FillUp Notice", "Form Fill Up"),
+        ("B.Sc. पुन: प्रवेश परीक्षाका लागि आवेदन फाराम भर्ने सम्बन्धी सूचना", "Form Fill Up"),
+        ("B.Sc. प्रवेश परीक्षा 2083 को नतिजा प्रकशित गरिएको बारे", "Results"),
+        ("B.Sc. प्रवेश परीक्षा २०८३ को परीक्षा केन्द्रसम्बन्धी अत्यन्त जरुरी सूचना", "Exam Centre"),
+        ("Bachelor in Information Technology (BIT) विषय पठन पाठन हुने सम्पूर्ण अांगिक क्याम्पसमा भर्ना सम्बन्धी जरूरी सूचना", "Admission"),
+        ("परीक्षार्थीहरूका लागि अत्यन्त जरूरी सूचना", "Examination"),
+        ("Academic Calendar of B.Sc.CSIT and Bachelor in Information Technology (BIT) V Semester-2081 Batch", "General Notice"),
+    ]
+    for title, expected in cases:
+        assert notices.classify(title)["category"] == expected, title
+
+
+def test_programmes_are_extracted_only_from_explicit_feed_titles():
+    title = (
+        "B.Sc.CSIT and Bachelor in Information Technology (BIT) "
+        "II Semester-2082 Exam Schedule"
+    )
+    assert notices.classify(title)["programmes"] == ["B.Sc. CSIT", "BIT"]
+    assert notices.classify(
+        "Bachelor in Data Science IV Semester-2081 Exam Result"
+    )["programmes"] == ["Bachelor in Data Science"]
+    assert notices.classify(
+        "M.Sc. Biodiversity and Environmental Management III Semester-2081 Exam Result"
+    )["programmes"] == ["M.Sc. Biodiversity and Environmental Management"]
+    assert notices.classify(
+        "M.Sc. IV Semester-2081 Exam Form FillUp Notice"
+    )["programmes"] == []
+
+
 class _Response:
     def __init__(self, text):
         self.text = text
+        self.headers = {}
+        self.status_code = 200
+        self.is_redirect = False
 
     def raise_for_status(self):
+        return None
+
+    def close(self):
         return None
 
 
 def test_scrape_reads_the_current_site_first(monkeypatch):
     html = FIXTURE.read_text(encoding="utf-8")
 
-    def fake_get(url, **kwargs):
+    def fake_get(url, **_kwargs):
         if "iost.tu.edu.np" in url:
             return _Response(html)
         raise AssertionError("the legacy portal should not be consulted")
@@ -87,23 +129,79 @@ def test_scrape_reads_the_current_site_first(monkeypatch):
     assert found[0]["publish_date"] >= found[-1]["publish_date"]
 
 
-def test_scrape_falls_back_when_the_new_site_is_unreachable(monkeypatch):
-    legacy = """
-    <div class="feature-content">
-      <div class="mt-3">
-        <a href="/storage/notice/routine.pdf"><b>B.Sc.CSIT Exam Routine</b></a>
-        <small>26th Jul, 2026</small>
+def test_scrape_preserves_source_order_for_notices_with_the_same_date(monkeypatch):
+    first_page = """
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-26</span></div>
+        <div class="detail"><a href="/notices/15953"><h5>B.Sc.CSIT exam schedule</h5></a></div>
       </div>
-    </div>
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-26</span></div>
+        <div class="detail"><a href="/notices/15952"><h5>Re-totaling result</h5></a></div>
+      </div>
+      <ul class="pagination"><li><a class="page-link" href="?cursor=older">Next »</a></li></ul>
+    """
+    second_page = """
+      <div class="recent-post-wrapper">
+        <div class="date"><span class="nep_date">2026-10-14</span></div>
+        <div class="detail"><a href="/notices/15925"><h5>Older exam result</h5></a></div>
+      </div>
     """
 
-    def fake_get(url, **kwargs):
-        if "iost.tu.edu.np" in url:
-            raise OSError("connection refused")
-        return _Response(legacy)
+    def fake_get(url, **_kwargs):
+        if "cursor=older" in url:
+            return _Response(second_page)
+        if url == notices.IOST_NOTICES:
+            return _Response(first_page)
+        raise AssertionError(f"Unexpected listing URL: {url}")
 
     monkeypatch.setattr(notices.requests, "get", fake_get)
+
+    found = notices.scrape_iost(max_pages=2)
+
+    assert [item["source_id"] for item in found] == ["15953", "15952", "15925"]
+
+
+def test_scrape_does_not_substitute_the_stale_legacy_site(monkeypatch):
+    def fake_get(url, **_kwargs):
+        if "iost.tu.edu.np" in url:
+            raise requests.ConnectionError("connection refused")
+        raise AssertionError("an unapproved legacy notice source was consulted")
+
+    monkeypatch.setattr(notices.requests, "get", fake_get)
+    monkeypatch.setattr(notices, "MAX_RETRIES", 1)
     found, site, error = notices.scrape()
-    assert found, "the feed must keep working on the legacy portal"
-    assert site == "tuiost.edu.np"
-    assert found[0]["publish_date"] == "2026-07-26"
+    assert found == []
+    assert site == "iost.tu.edu.np"
+    assert "ConnectionError" in error
+
+
+def test_detail_parser_extracts_title_date_and_attachment():
+    soup = BeautifulSoup("""
+      <div class="detail-page-inner">
+        <h4 class="title">B.Sc.CSIT exam schedule</h4>
+        <span class="nep_date">2026-10-26</span>
+      </div>
+      <table><tbody><tr>
+        <td>Exam schedule</td><td>pdf</td>
+        <td><a href="https://portal.tu.edu.np/notice/12/schedule.pdf">Download</a></td>
+      </tr></tbody></table>
+    """, "html.parser")
+    parsed = notices.parse_iost_detail(soup, "https://iost.tu.edu.np/notices/12")
+    assert parsed["title"] == "B.Sc.CSIT exam schedule"
+    assert parsed["publish_date"] == "2026-10-26"
+    assert parsed["attachments"] == [{
+        "url": "https://portal.tu.edu.np/notice/12/schedule.pdf",
+        "filename": "schedule.pdf",
+        "file_type": "pdf",
+    }]
+
+
+def test_detail_parser_ignores_attachment_links_on_untrusted_hosts():
+    soup = BeautifulSoup("""
+      <div class="detail-page-inner"><h4 class="title">Notice title</h4></div>
+      <table><tbody><tr><td>file.pdf</td><td>pdf</td>
+      <td><a href="https://example.com/file.pdf">Download</a></td></tr></tbody></table>
+    """, "html.parser")
+    parsed = notices.parse_iost_detail(soup, "https://iost.tu.edu.np/notices/12")
+    assert parsed["attachments"] == []

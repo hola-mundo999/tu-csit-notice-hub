@@ -1,7 +1,8 @@
 import streamlit as st
-import time
-from database import init_db, save_notice, get_notices
-from scraper import TUScraper
+import html
+from urllib.parse import urlparse
+
+from database import init_db, get_notices
 from notifier import TelegramNotifier
 
 st.set_page_config(
@@ -62,13 +63,6 @@ st.markdown("""
 # Initialize Database
 init_db()
 
-# Auto-seed initial notices if database is empty
-initial_notices = get_notices()
-if not initial_notices:
-    for n in TUScraper.get_curated_csit_notices():
-        save_notice(n)
-    initial_notices = get_notices()
-
 # Header
 st.markdown("""
 <div class="header-panel">
@@ -79,7 +73,7 @@ st.markdown("""
         📢 TU CSIT Notice & Routine Alert Hub
     </h1>
     <p style="margin: 8px 0 0 0; color: #94a3b8; font-size: 14px;">
-        Automated web scraper and notification pipeline for BSc CSIT exam routines, results, and academic notices.
+        Archived official IoST notices for BSc CSIT students, searchable by semester and category.
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -100,38 +94,17 @@ with st.sidebar:
     search_query = st.text_input("Keyword Search", placeholder="e.g. 2079, Routine, Result...")
 
     st.markdown("---")
-    st.markdown("### 🔄 Scraper Controls")
-    if "last_sync" not in st.session_state:
-        st.session_state.last_sync = None
-    if "sync_error" not in st.session_state:
-        st.session_state.sync_error = None
-
-    if st.button("🚀 Scrape & Sync Live Notices", type="primary"):
-        with st.spinner("Scraping Tribhuvan University notice board..."):
-            scraped, error = TUScraper.fetch_live_notices()
-            new_count = 0
-            for item in scraped:
-                if save_notice(item):
-                    new_count += 1
-            st.session_state.last_sync = time.strftime("%Y-%m-%d %H:%M:%S")
-            st.session_state.sync_error = error
-            if error:
-                st.warning(f"Sync completed with notice: {error}")
-            st.success(f"Sync complete! Added {new_count} new notices.")
-            time.sleep(0.5)
-            st.rerun()
-
-    if st.session_state.last_sync:
-        st.caption(f"Last sync: {st.session_state.last_sync}")
-    if st.session_state.sync_error:
-        st.caption(f"⚠️ {st.session_state.sync_error}")
+    st.markdown("### 🔄 Archive sync")
+    st.caption("Sync runs on the server, independently of dashboard visits.")
+    st.code("python iost_sync.py sync", language="powershell")
+    st.caption("Resume historical import with: python iost_sync.py backfill")
 
     st.markdown("---")
     st.markdown("👨‍💻 **Architected by:** Samyog")
     st.caption("Backend Automation & Web Scraping Project")
 
 # Metrics Overview
-all_cached = get_notices()
+all_cached = get_notices(source_only=True)
 routine_count = sum(1 for n in all_cached if n["category"] == "Exam Routine")
 results_count = sum(1 for n in all_cached if n["category"] == "Results")
 
@@ -151,7 +124,8 @@ st.markdown("<br>", unsafe_allow_html=True)
 filtered_notices = get_notices(
     category=category_filter,
     semester=semester_filter,
-    search_query=search_query
+    search_query=search_query,
+    source_only=True,
 )
 
 tab1, tab2 = st.tabs(["📋 Notice Feed", "📱 Telegram Alert Simulator"])
@@ -160,27 +134,34 @@ with tab1:
     if filtered_notices:
         for n in filtered_notices:
             urgent_html = '<span class="urgent-badge">🚨 URGENT</span>' if n["is_urgent"] else ''
+            source_url = n.get("url", "")
+            parsed_url = urlparse(source_url)
+            source_link = (
+                f'<a href="{html.escape(source_url, quote=True)}" target="_blank" rel="noopener noreferrer" '
+                'style="font-size: 12px; color: #38bdf8; text-decoration: none;">'
+                '🔗 View official IoST notice &rarr;</a>'
+                if parsed_url.scheme == "https" and parsed_url.hostname == "iost.tu.edu.np"
+                else "<span>Official notice link unavailable</span>"
+            )
             st.markdown(f"""
             <div class="notice-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div>
-                        <span class="cat-badge">{n['category']}</span>
+                        <span class="cat-badge">{html.escape(str(n['category']))}</span>
                         <span style="font-size: 11px; font-family: monospace; color: #94a3b8; margin-left: 8px;">
-                            {n['semester']}
+                            {html.escape(str(n['semester']))}
                         </span>
                         {urgent_html}
                     </div>
                     <span style="font-size: 12px; color: #64748b; font-family: monospace;">
-                        {n['publish_date']}
+                        {html.escape(str(n['publish_date']))}
                     </span>
                 </div>
                 <h3 style="color: white; font-size: 17px; margin: 4px 0 10px 0;">
-                    {n['title']}
+                    {html.escape(str(n['title']))}
                 </h3>
                 <div style="display: flex; gap: 12px; align-items: center; margin-top: 10px;">
-                    <a href="{n['url']}" target="_blank" style="font-size: 12px; color: #38bdf8; text-decoration: none;">
-                        🔗 View Official TU Document &rarr;
-                    </a>
+                    {source_link}
                 </div>
             </div>
             """, unsafe_allow_html=True)

@@ -1,74 +1,101 @@
-/* ==========================================================================
-   TU CSIT Notice Hub
-   Fetches /api/notices, caches the last good payload, and filters client-side.
-
-   Sections
-     1. Elements + state
-     2. Fetch + cache
-     3. Formatting helpers
-     4. Rendering (stats, chips, feed, states)
-     5. Wiring
-   ========================================================================== */
-
-/* ------------------------------------------------------------------ dom */
-
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
 const dom = {
-  sync: $("#sync-state"),
-  sourceBadge: $("#source-badge"),
-  sourceText: $("#source-text"),
+  menuToggle: $("#menu-toggle"),
+  nav: $("#primary-nav"),
   refresh: $("#refresh"),
   refreshLabel: $("#refresh-label"),
+  sourceBadge: $("#source-badge"),
+  sourceText: $("#source-text"),
+  sync: $("#sync-state"),
   search: $("#search"),
+  searchForm: $("#search-form"),
+  programme: $("#programme"),
   semester: $("#semester"),
+  sort: $("#sort-order"),
+  pageSize: $("#page-size"),
   chips: $("#chips"),
-  resultLine: $("#result-line"),
   reset: $("#reset"),
   banner: $("#banner"),
   bannerText: $("#banner-text"),
+  resultLine: $("#result-line"),
   feed: $("#feed"),
+  pagination: $("#pagination"),
+  pagePrevious: $("#page-previous"),
+  pageNext: $("#page-next"),
+  pageStatus: $("#page-status"),
   empty: $("#empty"),
+  emptyTitle: $("#empty h3"),
+  emptyText: $("#empty p"),
   emptyReset: $("#empty-reset"),
-  toast: $("#toast"),
   statTotal: $("#stat-total"),
   statExam: $("#stat-exam"),
   statResults: $("#stat-results"),
   statForms: $("#stat-forms"),
+  statGeneral: $("#stat-general"),
+  dialog: $("#document-dialog"),
+  documentTitle: $("#document-title"),
+  documentStatus: $("#document-status"),
+  documentFrame: $("#document-frame"),
+  documentDownload: $("#document-download"),
+  documentOriginal: $("#document-original"),
+  documentOpen: $("#document-open"),
+  documentClose: $("#document-close"),
+  toast: $("#toast"),
 };
 
-const CACHE_KEY = "tu-notice-hub:v1";
-const CACHE_TTL = 10 * 60 * 1000;
+const CACHE_KEY = "tu-notice-hub:v3";
+const PAGE_SIZES = new Set([12, 24, 48]);
 const CATEGORY_CLASS = {
   "Exam Routine": "exam",
   Results: "results",
   "Form Fill Up": "forms",
   "General Notice": "general",
 };
+const emptySummary = () => ({
+  total: 0,
+  exam_routines: 0,
+  results: 0,
+  form_fill_ups: 0,
+  general_notices: 0,
+});
 
 const state = {
   notices: [],
+  summary: null,
   source: "loading",
   fetchedAt: null,
+  syncStatus: null,
+  categoryCounts: {},
+  programmeOptions: [],
   error: null,
   stale: false,
   site: "",
   loading: false,
   query: "",
+  programme: "B.Sc. CSIT",
   semester: "all",
   category: "all",
+  sort: "newest",
+  page: 1,
+  pageSize: 24,
+  total: 0,
+  serverPaginated: false,
 };
-
-/* ----------------------------------------------------------------- utils */
 
 function readCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed.notices)) return null;
-    return parsed;
+    const cached = JSON.parse(raw);
+    return Array.isArray(cached.notices) &&
+      cached.notices.every((notice) => Array.isArray(notice.programmes)) &&
+      Array.isArray(cached.programme_options) &&
+      cached.category_counts &&
+      typeof cached.category_counts === "object"
+      ? cached
+      : null;
   } catch {
     return null;
   }
@@ -78,599 +105,773 @@ function writeCache(payload) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
   } catch {
-    /* storage may be full or blocked */
+    toast("Notices loaded, but this browser could not save a local copy.");
   }
-}
-
-function relativeTime(iso) {
-  if (!iso) return "Undated";
-  const then = new Date(iso);
-  if (Number.isNaN(then.getTime())) return "Undated";
-  const diff = Date.now() - then.getTime();
-  const day = 86_400_000;
-  if (diff < 0) return "Just now";
-  if (diff < day) {
-    const hours = Math.max(1, Math.round(diff / 3_600_000));
-    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  }
-  const days = Math.round(diff / day);
-  if (days < 31) return `${days} day${days === 1 ? "" : "s"} ago`;
-  const months = Math.round(days / 30.4);
-  if (months < 12) return `${months} month${months === 1 ? "" : "s"} ago`;
-  const years = Math.round(months / 12);
-  return `${years} year${years === 1 ? "" : "s"} ago`;
-}
-
-function formatDate(iso, fallback) {
-  if (!iso) return fallback || "Undated";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return fallback || iso;
-  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-}
-
-function formatSync(iso) {
-  if (!iso) return "Not synced yet";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "Not synced yet";
-  const mins = Math.round((Date.now() - date.getTime()) / 60_000);
-  if (mins < 1) return "Synced just now";
-  if (mins < 60) return `Synced ${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `Synced ${hours} h ago`;
-  return `Synced ${Math.round(hours / 24)} d ago`;
 }
 
 function toast(message) {
   dom.toast.textContent = message;
   dom.toast.classList.add("is-visible");
   window.clearTimeout(toast.timer);
-  toast.timer = window.setTimeout(() => dom.toast.classList.remove("is-visible"), 2600);
+  toast.timer = window.setTimeout(() => dom.toast.classList.remove("is-visible"), 3200);
 }
 
-/* ----------------------------------------------------------------- fetch */
+function formatDate(value, fallback = "Date unavailable") {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return new Intl.DateTimeFormat("en", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
 
-/* IoST publishes on iost.tu.edu.np. The server function may run outside the
-   network that reaches that host, so when it can only read the older
-   tuiost.edu.np listing, the browser tries the current site itself. The
-   visitor is usually in Nepal, where it answers. Any failure is silent and
-   the server feed stays as it is. */
-const PORTAL_CATEGORIES = [
-  ["Exam Routine", ["routine", "schedule", "exam center", "examination center", "time table", "timetable", "तालिका"]],
-  ["Results", ["result", "re-total", "retotaling", "re-totaling", "topper", "pass list", "नतिजा", "नतीजा", "फलाफल"]],
-  ["Form Fill Up", ["form fill", "fill-up", "fill up", "registration", "deadline", "apply", "फाराम भर्ने", "फारम भर्ने", "आवेदन फाराम"]],
-];
+function relativeDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  if (days < 0) return "Recently published";
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 30) return `${days} days ago`;
+  return "";
+}
 
-const PORTAL_SEMESTERS = [
-  ["8th Sem", [/\b8th\s+sem/i, /\beighth\s+sem/i, /\bviii\s+sem/i]],
-  ["7th Sem", [/\b7th\s+sem/i, /\bseventh\s+sem/i, /\bvii\s+sem/i]],
-  ["6th Sem", [/\b6th\s+sem/i, /\bsixth\s+sem/i, /\bvi\s+sem/i]],
-  ["5th Sem", [/\b5th\s+sem/i, /\bfifth\s+sem/i, /\bv\s+sem/i]],
-  ["4th Sem", [/\b4th\s+sem/i, /\bfourth\s+sem/i, /\biv\s+sem/i]],
-  ["3rd Sem", [/\b3rd\s+sem/i, /\bthird\s+sem/i, /\biii\s+sem/i]],
-  ["2nd Sem", [/\b2nd\s+sem/i, /\bsecond\s+sem/i, /\bii\s+sem/i]],
-  ["1st Sem", [/\b1st\s+sem/i, /\bfirst\s+sem/i, /\bi\s+sem/i]],
-];
-
-function classifyPortal(title) {
-  const lower = title.toLowerCase();
-  let category = "General Notice";
-  for (const [name, words] of PORTAL_CATEGORIES) {
-    if (words.some((word) => lower.includes(word))) {
-      category = name;
-      break;
-    }
+function summaryForNotices(notices) {
+  const summary = emptySummary();
+  summary.total = notices.length;
+  for (const notice of notices) {
+    if (notice.category === "Exam Routine") summary.exam_routines += 1;
+    else if (notice.category === "Results") summary.results += 1;
+    else if (notice.category === "Form Fill Up") summary.form_fill_ups += 1;
+    else summary.general_notices += 1;
   }
-  let semester = "All Semesters";
-  for (const [name, patterns] of PORTAL_SEMESTERS) {
-    if (patterns.some((pattern) => pattern.test(lower))) {
-      semester = name;
-      break;
-    }
+  return summary;
+}
+
+function normalizeSummary(candidate, notices, source) {
+  const keys = Object.keys(emptySummary());
+  if (candidate && keys.every((key) => Number.isSafeInteger(candidate[key]) && candidate[key] >= 0)) {
+    return Object.fromEntries(keys.map((key) => [key, candidate[key]]));
   }
-  const urgent =
-    category === "Exam Routine" ||
-    category === "Form Fill Up" ||
-    lower.includes("last date");
-  return { category, semester, urgent };
+  return source === "live" ? summaryForNotices(notices) : null;
 }
 
-function digest12(value) {
-  let h = 5381;
-  for (let i = 0; i < value.length; i++) h = ((h << 5) + h) ^ value.charCodeAt(i);
-  return (h >>> 0).toString(36).padStart(7, "0");
-}
-
-function readCurrentPortal(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const notices = [];
-  const seen = new Set();
-  for (const block of doc.querySelectorAll("div.recent-post-wrapper")) {
-    const link = block.querySelector("div.detail a[href]");
-    if (!link) continue;
-    const heading = link.querySelector("h5");
-    const title = String((heading && heading.textContent) || link.textContent || "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (title.length < 8) continue;
-    let url;
-    try {
-      url = new URL(link.getAttribute("href"), "https://iost.tu.edu.np/").href;
-    } catch {
-      continue;
-    }
-    if (seen.has(url)) continue;
-    seen.add(url);
-    const dateEl = block.querySelector(".nep_date") || block.querySelector(".date");
-    const raw = dateEl ? dateEl.textContent.trim() : "";
-    const published = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
-    notices.push({
-      id: digest12(`${title}|${url}`),
-      title: title.replace(/\s*[\u2014\u2013]\s*/g, " - ").slice(0, 180),
-      url,
-      publish_date: published,
-      date_label: raw || "Undated",
-      is_pdf: /\.pdf($|\?)/i.test(url),
-      source: "live",
-      ...classifyPortal(title),
-    });
-  }
-  notices.sort(
-    (a, b) =>
-      String(b.publish_date || "").localeCompare(String(a.publish_date || "")) ||
-      b.title.localeCompare(a.title)
-  );
-  return notices;
-}
-
-async function portalFetch(url) {
-  // An unreachable host can hang for a minute. The feed must never wait that
-  // long for a site that may simply not answer this network.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
+function isOfficialUrl(value) {
   try {
-    return await fetch(url, { credentials: "omit", signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function readPortalDirectly() {
-  try {
-    const notices = [];
-    const seen = new Set();
-    let url = "https://iost.tu.edu.np/notices";
-    // Two cursor pages is enough for a feed that shows twenty cards.
-    for (let page = 0; page < 2 && url; page += 1) {
-      const response = await portalFetch(url);
-      if (!response.ok) break;
-      const html = await response.text();
-      const batch = readCurrentPortal(html).filter((notice) => !seen.has(notice.url));
-      batch.forEach((notice) => seen.add(notice.url));
-      notices.push(...batch);
-      if (!batch.length) break;
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      const next = [...doc.querySelectorAll("ul.pagination a.page-link[href]")].find((link) =>
-        link.href.includes("cursor=") && !/previous/i.test(link.textContent)
-      );
-      url = next ? new URL(next.getAttribute("href"), "https://iost.tu.edu.np/notices").href : "";
-    }
-    if (!notices.length) return null;
-    notices.sort(
-      (a, b) =>
-        String(b.publish_date || "").localeCompare(String(a.publish_date || "")) ||
-        b.title.localeCompare(a.title)
-    );
-    return notices;
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      ["iost.tu.edu.np", "portal.tu.edu.np"].includes(url.hostname);
   } catch {
-    // Blocked by CORS, offline, or the host does not answer from here.
-    return null;
+    return false;
   }
 }
 
+function isLocalDocumentUrl(value, disposition) {
+  return typeof value === "string" &&
+    new RegExp(`^/api/document\\?attachment_id=\\d+&disposition=${disposition}$`).test(value);
+}
+
+function isPdf(attachment) {
+  return attachment.mime_type === "application/pdf" ||
+    /\.pdf(?:$|[?#])/i.test(attachment.filename || attachment.url || "");
+}
+
+let activeRequest = null;
 async function fetchFeed({ force = false, silent = false } = {}) {
-  if (state.loading) return;
+  activeRequest?.abort();
+  const controller = new AbortController();
+  activeRequest = controller;
   state.loading = true;
-  dom.refresh.classList.add("is-busy");
   dom.refresh.disabled = true;
-  if (!state.notices.length) dom.feed.setAttribute("aria-busy", "true");
+  dom.refresh.classList.add("is-busy");
+  if (!state.notices.length) {
+    dom.feed.setAttribute("aria-busy", "true");
+    renderFeed();
+  }
+
+  const params = new URLSearchParams({
+    page: String(state.page),
+    page_size: String(state.pageSize),
+    sort: state.sort,
+  });
+  if (state.category !== "all") params.set("category", state.category);
+  if (state.programme !== "all") params.set("programme", state.programme);
+  if (state.semester !== "all") params.set("semester", state.semester);
+  if (state.query) params.set("q", state.query);
 
   try {
-    /* Read iost.tu.edu.np from the visitor's own network first. The serverless
-       function runs outside it, and a cached older listing is worse than a
-       short one from the site that is actually publishing. */
-    const direct = await readPortalDirectly();
-    if (direct && direct.length) {
-      const known = new Set(state.notices.map((notice) => notice.id));
-      const fresh = state.notices.length ? direct.filter((notice) => !known.has(notice.id)) : [];
-      state.notices = direct;
-      state.source = "live";
-      state.site = "iost.tu.edu.np";
-      state.fetchedAt = new Date().toISOString();
-      state.error = null;
-      state.stale = false;
-      writeCache({
-        notices: state.notices,
-        source: state.source,
-        site: state.site,
-        fetched_at: state.fetchedAt,
-        error: null,
-      });
-      render();
-      if (fresh.length && !silent) {
-        toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on iost.tu.edu.np`);
-      } else if (force) {
-        toast("Checked iost.tu.edu.np just now");
-      }
-      return;
-    }
-
-    const url = `/api/notices?t=${Date.now()}`;
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const response = await fetch(`/api/notices?${params}`, {
+      headers: { Accept: "application/json" },
+      cache: "no-cache",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Notice request failed (HTTP ${response.status}).`);
     const payload = await response.json();
-    const incoming = Array.isArray(payload.notices) ? payload.notices : [];
-    const hadLive = state.source === "live" && state.notices.length > 0;
-    const known = new Set(state.notices.map((notice) => notice.id));
-    const fresh = state.notices.length ? incoming.filter((notice) => !known.has(notice.id)) : [];
+    if (!Array.isArray(payload.notices)) throw new Error("The notice API returned an invalid response.");
 
-    // A failed scrape should never replace a good live feed with six curated cards.
-    if (payload.source !== "live" && hadLive) {
+    if (payload.source === "unavailable" && state.notices.length) {
       state.stale = true;
-      state.error = payload.error || "The TU portal did not respond.";
-      renderBadge();
-      renderBanner();
-      if (force) toast("Portal unreachable, keeping the last live feed");
+      state.error = payload.error || "The official source is unavailable.";
+      render();
+      if (force) toast("Source unavailable. Showing the last available notices.");
       return;
     }
 
-    state.notices = incoming;
-    state.source = payload.source === "live" ? "live" : "fallback";
+    const previousIds = new Set(state.notices.map((notice) => notice.id));
+    const newNotices = payload.notices.filter((notice) => !previousIds.has(notice.id));
+    state.notices = payload.notices;
+    state.source = payload.source || "unavailable";
     state.site = payload.source_site || "";
-    state.fetchedAt = payload.fetched_at || new Date().toISOString();
+    state.fetchedAt = payload.fetched_at || null;
+    state.syncStatus = payload.sync_status || null;
     state.error = payload.error || null;
     state.stale = false;
-    writeCache({ notices: state.notices, source: state.source, site: state.site, fetched_at: state.fetchedAt, error: state.error });
+    state.total = Number.isSafeInteger(payload.total) ? payload.total : payload.notices.length;
+    state.serverPaginated = payload.pagination_mode === "server" || state.source === "archive";
+    state.summary = normalizeSummary(payload.summary, payload.notices, state.source);
+    state.categoryCounts = payload.category_counts || {};
+    state.programmeOptions = Array.isArray(payload.programme_options)
+      ? payload.programme_options.filter((item) => item && typeof item.name === "string")
+      : [];
+    renderProgrammeOptions();
+
+    const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
+    if (state.page > pages) {
+      state.page = pages;
+      return fetchFeed({ silent: true });
+    }
+
+    writeCache({
+      notices: state.notices,
+      source: state.source,
+      source_site: state.site,
+      fetched_at: state.fetchedAt,
+      sync_status: state.syncStatus,
+      total: state.total,
+      summary: state.summary,
+      category_counts: state.categoryCounts,
+      programme_options: state.programmeOptions,
+    });
     render();
-    if (fresh.length && !silent) {
-      toast(`${fresh.length} new notice${fresh.length === 1 ? "" : "s"} published on ${state.site || "the portal"}`);
-    } else if (force) {
-      toast(state.source === "live" ? `Checked ${state.site || "the portal"} just now` : "Portal unreachable, fallback refreshed");
+    if (force) toast("Notice feed checked.");
+    else if (!silent && newNotices.length) {
+      toast(`${newNotices.length} new notice${newNotices.length === 1 ? "" : "s"} found.`);
     }
   } catch (error) {
-    state.error = String(error.message || error);
+    if (error.name === "AbortError") return;
+    state.error = error.message || "The notice feed could not be reached.";
     if (!state.notices.length) {
       const cached = readCache();
       if (cached) {
         state.notices = cached.notices;
-        state.source = cached.source || "fallback";
-        state.site = cached.site || "";
+        state.source = cached.source || "unavailable";
+        state.site = cached.source_site || "";
         state.fetchedAt = cached.fetched_at || null;
+        state.syncStatus = cached.sync_status || null;
+        state.total = cached.total || cached.notices.length;
+        state.summary = normalizeSummary(cached.summary, cached.notices, cached.source);
+        state.serverPaginated = cached.source === "archive";
+        state.categoryCounts = cached.category_counts || {};
+        state.programmeOptions = Array.isArray(cached.programme_options) ? cached.programme_options : [];
+        renderProgrammeOptions();
+      } else {
+        state.source = "unavailable";
       }
+      state.stale = Boolean(cached);
+    } else {
+      state.stale = true;
     }
-    state.source = state.notices.length ? state.source : "error";
     render();
-    if (force) toast("Could not reach the feed, showing cached notices");
+    if (force) toast("Could not check for new notices.");
   } finally {
-    state.loading = false;
-    dom.refresh.classList.remove("is-busy");
-    dom.refresh.disabled = false;
-    dom.feed.setAttribute("aria-busy", "false");
-    renderBadge();
+    if (activeRequest === controller) {
+      activeRequest = null;
+      state.loading = false;
+      dom.refresh.disabled = false;
+      dom.refresh.classList.remove("is-busy");
+      dom.feed.setAttribute("aria-busy", "false");
+      renderStatus();
+      renderFeed();
+    }
   }
 }
 
-/* --------------------------------------------------------------- filters */
-
-function filtered() {
-  const query = state.query.trim().toLowerCase();
+function locallyFilteredNotices() {
+  const query = state.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return state.notices.filter((notice) => {
     if (state.category !== "all" && notice.category !== state.category) return false;
-    if (state.semester !== "all" && notice.semester !== state.semester) return false;
-    if (!query) return true;
-    const haystack = `${notice.title} ${notice.category} ${notice.semester}`.toLowerCase();
-    return query.split(/\s+/).every((word) => haystack.includes(word));
+    if (state.programme !== "all" &&
+        !(Array.isArray(notice.programmes) && notice.programmes.includes(state.programme))) return false;
+    if (state.semester !== "all" &&
+        notice.semester !== state.semester &&
+        notice.semester !== "All Semesters") return false;
+    const haystack = [
+      notice.title,
+      notice.source_id,
+      notice.id,
+      notice.category,
+      notice.semester,
+    ].join(" ").toLocaleLowerCase();
+    return query.every((term) => haystack.includes(term));
   });
 }
 
-function isNew(notice) {
-  if (!notice.publish_date) return false;
-  const published = new Date(notice.publish_date).getTime();
-  return Number.isFinite(published) && Date.now() - published < 14 * 86_400_000;
-}
-
-/* --------------------------------------------------------------- render */
-
 function renderStats() {
-  const totals = { exam: 0, results: 0, forms: 0 };
-  for (const notice of state.notices) {
-    if (notice.category === "Exam Routine") totals.exam += 1;
-    else if (notice.category === "Results") totals.results += 1;
-    else if (notice.category === "Form Fill Up") totals.forms += 1;
+  const summary = state.summary;
+  const values = [
+    [dom.statTotal, summary?.total],
+    [dom.statExam, summary?.exam_routines],
+    [dom.statResults, summary?.results],
+    [dom.statForms, summary?.form_fill_ups],
+    [dom.statGeneral, summary?.general_notices],
+  ];
+  for (const [element, value] of values) {
+    element.textContent = Number.isSafeInteger(value) ? String(value) : "—";
   }
-  dom.statTotal.textContent = String(state.notices.length);
-  dom.statExam.textContent = String(totals.exam);
-  dom.statResults.textContent = String(totals.results);
-  dom.statForms.textContent = String(totals.forms);
 }
 
-function renderChips() {
-  const counts = { all: state.notices.length };
-  for (const notice of state.notices) {
-    counts[notice.category] = (counts[notice.category] || 0) + 1;
-  }
-  for (const chip of $$(".chip", dom.chips)) {
-    const key = chip.dataset.category;
-    const badge = chip.querySelector("[data-count]");
-    if (badge) badge.textContent = String(counts[key] || 0);
-    const active = state.category === key;
+function renderCategories() {
+  const summary = state.summary || {};
+  const counts = {
+    all: state.categoryCounts.all ?? summary.total,
+    ...state.categoryCounts,
+  };
+  for (const chip of $$(".category-chip", dom.chips)) {
+    const category = chip.dataset.category;
+    const count = chip.querySelector("[data-count]");
+    if (count) count.textContent = Number.isSafeInteger(counts[category]) ? String(counts[category]) : "—";
+    const active = state.category === category;
     chip.classList.toggle("is-active", active);
     chip.setAttribute("aria-pressed", String(active));
   }
 }
 
-function renderBadge() {
-  const map = {
-    live: ["Live", "live"],
-    fallback: ["Fallback", "fallback"],
-    error: ["Offline", "error"],
-    loading: ["Checking", "loading"],
-  };
-  const [label, kind] = map[state.source] || map.loading;
-  dom.sourceText.textContent = label;
-  dom.sourceBadge.dataset.source = kind;
-  // IoST publishes on iost.tu.edu.np. tuiost.edu.np still answers but has not
-  // taken a notice since 2023, so say so instead of showing a quiet "Live".
-  const site = state.site || "";
-  const staleSite = site === "tuiost.edu.np";
-  if (state.source === "live") {
-    if (staleSite) {
-      dom.sourceText.textContent = "Old portal";
-      dom.sourceBadge.dataset.source = "fallback";
-      dom.sourceBadge.title =
-        "iost.tu.edu.np could not be reached, so this is the older tuiost.edu.np feed, which stopped publishing in 2023.";
-    } else {
-      dom.sourceBadge.title = site ? `Reading ${site}` : "Reading the IoST portal";
-    }
+function renderProgrammeOptions() {
+  const selected = state.programme;
+  const counts = new Map(state.programmeOptions.map((item) => [item.name, item.count]));
+  const names = new Set(["B.Sc. CSIT", ...counts.keys()]);
+  const options = [new Option("All programmes", "all")];
+  for (const name of [...names].sort((a, b) => a.localeCompare(b))) {
+    const count = counts.get(name);
+    options.push(new Option(
+      Number.isSafeInteger(count) ? `${name} (${count})` : name,
+      name,
+    ));
   }
-  dom.sync.textContent = state.loading ? "Syncing…" : formatSync(state.fetchedAt);
+  dom.programme.replaceChildren(...options);
+  dom.programme.value = selected === "all" || names.has(selected) ? selected : "B.Sc. CSIT";
+  state.programme = dom.programme.value;
+}
+
+function renderStatus() {
+  const labels = {
+    archive: ["Archived", "archive"],
+    live: ["Live preview", "live"],
+    unavailable: ["Source unavailable", "error"],
+    loading: ["Checking source", "loading"],
+  };
+  const [label, source] = labels[state.source] || labels.loading;
+  dom.sourceText.textContent = label;
+  dom.sourceBadge.dataset.source = source;
+  dom.sourceBadge.title = state.site ? `Source: ${state.site}` : "Official IoST notices";
+  if (state.loading) dom.sync.textContent = "Checking the official source…";
+  else if (state.stale) dom.sync.textContent = "Showing previously loaded notices";
+  else if (state.source === "archive") {
+    const lastSuccess = state.syncStatus?.last_successful_at;
+    const syncState = state.syncStatus?.status;
+    if (lastSuccess) dom.sync.textContent = `Last synced ${formatDate(lastSuccess)}`;
+    else if (syncState === "not_configured") dom.sync.textContent = "Archive sync is not configured";
+    else dom.sync.textContent = `Archive sync status: ${syncState || "unknown"}`;
+  } else if (state.source === "live") {
+    dom.sync.textContent = "Current official listing · not a persistent archive";
+  } else {
+    dom.sync.textContent = "Official source status unavailable";
+  }
 }
 
 function renderBanner() {
+  const messages = [];
   if (state.stale) {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent =
-      "The latest refresh failed, so this is the last live feed. Try Refresh again in a minute.";
-  } else if (state.source === "live" && state.site === "tuiost.edu.np") {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent =
-      "iost.tu.edu.np was not reachable from this server, so the older tuiost.edu.np feed is shown. It stopped publishing in 2023.";
-  } else if (state.source === "fallback" || state.source === "error") {
-    dom.banner.hidden = false;
-    dom.bannerText.textContent = state.error
-      ? `Showing the curated fallback list. ${state.error}`
-      : "Showing the curated fallback list while the TU portal is unavailable.";
-  } else {
-    dom.banner.hidden = true;
-    dom.bannerText.textContent = "";
+    messages.push("The latest request failed. The notices shown are from the last successful response.");
   }
+  if (state.source === "live") {
+    messages.push(
+      "This is a live preview of recent official notices, not a complete historical archive. " +
+      "Durable archive storage and scheduled synchronization are not configured for this deployment.",
+    );
+  } else if (state.source === "archive") {
+    messages.push(
+      "Persistent archive storage and scheduled synchronization are not configured for this deployment; " +
+      "historical completeness is not guaranteed.",
+    );
+  } else if (state.source === "unavailable") {
+    messages.push(state.error
+      ? `Could not load official IoST notices. ${state.error}`
+      : "The official IoST source is unavailable. Try refreshing later.");
+  }
+  dom.banner.hidden = messages.length === 0;
+  dom.bannerText.textContent = messages.join(" ");
+}
+
+function addTag(parent, label, variant = "") {
+  const tag = document.createElement("span");
+  tag.className = `notice-tag${variant ? ` notice-tag--${variant}` : ""}`;
+  tag.textContent = label;
+  parent.append(tag);
+}
+
+function createIcon(pathContent) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 20 20");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = pathContent;
+  return icon;
+}
+
+function documentAttachments(notice) {
+  return (Array.isArray(notice.attachments) ? notice.attachments : []).filter((attachment) => {
+    const localAvailable = attachment.available &&
+      isLocalDocumentUrl(attachment.view_url, "inline") &&
+      isLocalDocumentUrl(attachment.download_url, "attachment");
+    return localAvailable || isOfficialUrl(attachment.url);
+  });
 }
 
 function noticeCard(notice) {
   const article = document.createElement("article");
-  article.className = "notice" + (notice.urgent ? " is-urgent" : "");
+  article.className = "notice-card";
 
+  const main = document.createElement("div");
+  main.className = "notice-card__main";
   const tags = document.createElement("div");
-  tags.className = "notice__tags";
+  tags.className = "notice-card__tags";
+  addTag(tags, notice.category || "General Notice", CATEGORY_CLASS[notice.category] || "general");
+  if (notice.semester && notice.semester !== "All Semesters") addTag(tags, notice.semester);
 
-  const category = document.createElement("span");
-  category.className = `tag tag--${CATEGORY_CLASS[notice.category] || "general"}`;
-  category.textContent = notice.category || "Notice";
-  tags.append(category);
-
-  if (notice.semester && notice.semester !== "All Semesters") {
-    const semester = document.createElement("span");
-    semester.className = "tag";
-    semester.textContent = notice.semester;
-    tags.append(semester);
+  const explicitlyUrgent = /\b(urgent|last date|deadline|due date)\b/i.test(notice.title || "");
+  if (explicitlyUrgent) addTag(tags, "Time-sensitive", "urgent");
+  else if (relativeDate(notice.publish_date) === "Today" ||
+           relativeDate(notice.publish_date) === "Yesterday") {
+    addTag(tags, "Recently published", "new");
   }
 
-  if (notice.urgent) {
-    const urgent = document.createElement("span");
-    urgent.className = "tag tag--urgent";
-    urgent.textContent = "Urgent";
-    tags.append(urgent);
-  } else if (isNew(notice)) {
-    const fresh = document.createElement("span");
-    fresh.className = "tag tag--new";
-    fresh.textContent = "New";
-    tags.append(fresh);
+  const title = document.createElement("h3");
+  title.className = "notice-card__title";
+  if (isOfficialUrl(notice.url)) {
+    const link = document.createElement("a");
+    link.href = notice.url;
+    link.target = "_blank";
+    link.rel = "noreferrer noopener";
+    link.textContent = notice.title || "Untitled notice";
+    title.append(link);
+  } else {
+    title.textContent = notice.title || "Untitled notice";
   }
 
-  const title = document.createElement("h2");
-  title.className = "notice__title";
-  const link = document.createElement("a");
-  link.href = notice.url;
-  link.target = "_blank";
-  link.rel = "noreferrer noopener";
-  link.textContent = notice.title;
-  title.append(link);
+  const meta = document.createElement("div");
+  meta.className = "notice-card__meta";
+  const dateMeta = document.createElement("span");
+  dateMeta.className = "notice-card__meta-item";
+  dateMeta.append(createIcon('<rect x="3" y="4.5" width="14" height="12" rx="1.5"/><path d="M6.5 3v3M13.5 3v3M3 8h14"/>'));
+  dateMeta.append(document.createTextNode(formatDate(notice.publish_date, notice.date_label || "Date unavailable")));
+  meta.append(dateMeta);
 
-  const foot = document.createElement("div");
-  foot.className = "notice__foot";
-
-  const dateWrap = document.createElement("div");
-  dateWrap.className = "notice__date";
-  const date = document.createElement("strong");
-  date.textContent = formatDate(notice.publish_date, notice.date_label);
-  const relative = document.createElement("span");
-  relative.textContent = relativeTime(notice.publish_date);
-  dateWrap.append(date, relative);
+  const sourceId = notice.source_id || (notice.id ? String(notice.id) : "");
+  if (sourceId) {
+    const separator = document.createElement("span");
+    separator.className = "notice-card__meta-separator";
+    separator.setAttribute("aria-hidden", "true");
+    const idMeta = document.createElement("span");
+    idMeta.className = "notice-card__meta-item";
+    idMeta.textContent = `Notice ID ${sourceId}`;
+    meta.append(separator, idMeta);
+  }
+  const relative = relativeDate(notice.publish_date);
+  if (relative) {
+    const separator = document.createElement("span");
+    separator.className = "notice-card__meta-separator";
+    separator.setAttribute("aria-hidden", "true");
+    const relativeMeta = document.createElement("span");
+    relativeMeta.className = "notice-card__meta-item";
+    relativeMeta.textContent = relative;
+    meta.append(separator, relativeMeta);
+  }
+  main.append(tags, title, meta);
 
   const actions = document.createElement("div");
-  actions.className = "notice__actions";
-
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.className = "icon-btn";
-  copy.setAttribute("aria-label", "Copy notice link");
-  copy.title = "Copy link";
-  copy.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5H6a1 1 0 0 0-1 1v9"/></svg>';
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(notice.url);
-      toast("Notice link copied");
-    } catch {
-      toast(notice.url);
+  actions.className = "notice-card__actions";
+  for (const attachment of documentAttachments(notice)) {
+    const pdf = isPdf(attachment);
+    const previewUrl = attachment.available ? attachment.view_url : attachment.url;
+    const downloadUrl = attachment.available ? attachment.download_url : attachment.url;
+    if (pdf) {
+      const preview = document.createElement("button");
+      preview.className = "button button--secondary";
+      preview.type = "button";
+      preview.textContent = "Preview PDF";
+      preview.setAttribute("aria-label", `Preview ${attachment.filename || "notice PDF"}`);
+      preview.dataset.previewUrl = previewUrl;
+      preview.dataset.noticeUrl = isOfficialUrl(notice.url) ? notice.url : "";
+      preview.dataset.filename = attachment.filename || "Notice PDF";
+      preview.dataset.downloadUrl = downloadUrl;
+      actions.append(preview);
     }
-  });
+    const download = document.createElement("a");
+    download.className = "button button--secondary";
+    download.href = downloadUrl;
+    download.textContent = "Download";
+    download.setAttribute("aria-label", `Download ${attachment.filename || "notice document"}`);
+    if (!attachment.available) {
+      download.target = "_blank";
+      download.rel = "noreferrer noopener";
+    }
+    actions.append(download);
+  }
 
-  const open = document.createElement("a");
-  open.className = "icon-btn";
-  open.href = notice.url;
-  open.target = "_blank";
-  open.rel = "noreferrer noopener";
-  open.setAttribute("aria-label", notice.is_pdf ? "Open notice PDF" : "Open notice");
-  open.title = notice.is_pdf ? "Open PDF" : "Open notice";
-  open.innerHTML = notice.is_pdf
-    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 13h4M10 16h4"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+  if (isOfficialUrl(notice.url)) {
+    const original = document.createElement("a");
+    original.className = "button button--primary";
+    original.href = notice.url;
+    original.target = "_blank";
+    original.rel = "noreferrer noopener";
+    original.textContent = "Official notice";
+    actions.append(original);
+  }
 
-  actions.append(copy, open);
-  foot.append(dateWrap, actions);
-  article.append(tags, title, foot);
+  if (isOfficialUrl(notice.url)) {
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "icon-button";
+    copy.setAttribute("aria-label", `Copy link to ${notice.title || "notice"}`);
+    copy.title = "Copy official notice link";
+    copy.append(createIcon('<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/>'));
+    copy.addEventListener("click", () => copyNoticeLink(notice.url));
+    actions.append(copy);
+  }
+
+  article.append(main, actions);
   return article;
 }
 
+async function copyNoticeLink(url) {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+      toast("Official notice link copied.");
+      return;
+    }
+    const field = document.createElement("textarea");
+    field.value = url;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    const copied = document.execCommand("copy");
+    field.remove();
+    if (!copied) throw new Error("Clipboard access is unavailable.");
+    toast("Official notice link copied.");
+  } catch {
+    toast("Could not copy the link. Open the official notice to copy it manually.");
+  }
+}
+
 function renderFeed() {
-  const list = filtered();
-  const hasFilters = Boolean(state.query.trim()) || state.semester !== "all" || state.category !== "all";
+  const localResults = state.serverPaginated ? state.notices : locallyFilteredNotices();
+  const total = state.serverPaginated ? state.total : localResults.length;
+  const pageCount = Math.max(1, Math.ceil(total / state.pageSize));
+  const page = Math.min(state.page, pageCount);
+  if (page !== state.page) state.page = page;
+  const start = total ? (state.page - 1) * state.pageSize : 0;
+  const visible = state.serverPaginated
+    ? localResults
+    : localResults.slice(start, start + state.pageSize);
+  const end = total ? Math.min(start + visible.length, total) : 0;
+  const hasFilters = Boolean(
+    state.query || state.programme !== "all" || state.semester !== "all" || state.category !== "all",
+  );
 
   dom.reset.hidden = !hasFilters;
-  dom.empty.hidden = list.length > 0 || state.loading;
-  dom.feed.hidden = list.length === 0;
+  dom.empty.hidden = visible.length > 0 || state.loading;
+  const loadFailed = state.source === "unavailable" && !state.notices.length;
+  dom.emptyTitle.textContent = loadFailed ? "Notices could not be loaded" : "No matching notices";
+  dom.emptyText.textContent = loadFailed
+    ? "The official source could not be reached. Check your connection and try again."
+    : "Try a different search or remove one of your filters.";
+  dom.emptyReset.textContent = loadFailed ? "Try again" : "Clear all filters";
+  dom.emptyReset.hidden = !loadFailed && !hasFilters;
+  dom.feed.hidden = visible.length === 0 && !state.loading;
+  dom.pagination.hidden = total <= state.pageSize;
+  dom.pagePrevious.disabled = state.page <= 1 || state.loading;
+  dom.pageNext.disabled = state.page >= pageCount || state.loading;
+  dom.pageStatus.textContent = `Page ${state.page} of ${pageCount}`;
 
   if (!state.notices.length && state.loading) {
-    dom.feed.replaceChildren(...Array.from({ length: 4 }, () => {
+    dom.feed.replaceChildren(...Array.from({ length: 3 }, () => {
       const skeleton = document.createElement("article");
-      skeleton.className = "notice is-skeleton";
+      skeleton.className = "notice-card is-skeleton";
+      skeleton.setAttribute("aria-hidden", "true");
       return skeleton;
     }));
     dom.resultLine.textContent = "Loading notices…";
     return;
   }
 
-  if (!state.notices.length) {
-    dom.resultLine.textContent = "No notices available";
+  if (!visible.length) {
     dom.feed.replaceChildren();
+    dom.resultLine.textContent = loadFailed
+      ? "The notice source is unavailable."
+      : "No notices match these filters.";
     return;
   }
 
+  const kind = state.source === "live" && !hasFilters ? "recent notices" : "notices";
   dom.resultLine.textContent = hasFilters
-    ? `Showing ${list.length} of ${state.notices.length} notices`
-    : `${state.notices.length} notices · newest first`;
-
-  dom.feed.replaceChildren(...list.map(noticeCard));
+    ? `Showing ${start + 1}–${end} of ${total} matching ${kind}`
+    : `Showing ${start + 1}–${end} of ${total} ${kind}`;
+  dom.feed.replaceChildren(...visible.map(noticeCard));
 }
 
 function render() {
   renderStats();
-  renderChips();
-  renderBadge();
+  renderCategories();
+  renderStatus();
   renderBanner();
   renderFeed();
 }
 
-/* ---------------------------------------------------------------- wiring */
-
-dom.refresh.addEventListener("click", () => fetchFeed({ force: true }));
-
-let searchTimer = null;
-dom.search.addEventListener("input", (event) => {
-  const value = event.target.value;
-  window.clearTimeout(searchTimer);
-  searchTimer = window.setTimeout(() => {
-    state.query = value;
-    renderFeed();
-    dom.resultLine.parentElement.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, 120);
-});
-
-dom.semester.addEventListener("change", (event) => {
-  state.semester = event.target.value;
-  renderFeed();
-});
-
-dom.chips.addEventListener("click", (event) => {
-  const chip = event.target.closest(".chip");
-  if (!chip) return;
-  state.category = chip.dataset.category;
-  renderChips();
-  renderFeed();
-});
+function changeFilters() {
+  state.page = 1;
+  render();
+  fetchFeed({ silent: true });
+}
 
 function resetFilters() {
   state.query = "";
-  state.semester = "all";
+  state.programme = "all";
   state.category = "all";
+  state.semester = "all";
+  state.sort = "newest";
+  state.page = 1;
   dom.search.value = "";
+  dom.programme.value = "all";
   dom.semester.value = "all";
+  dom.sort.value = "newest";
   render();
+  fetchFeed({ silent: true });
 }
 
+let documentPreviewTimer = null;
+let documentPreviewToken = 0;
+function showDocument(button) {
+  const url = button.dataset.previewUrl;
+  const localPreview = isLocalDocumentUrl(url, "inline");
+  if (!url || (!localPreview && !isOfficialUrl(url))) {
+    toast("This document link is not available.");
+    return;
+  }
+  const filename = button.dataset.filename || "Notice PDF";
+  const downloadUrl = button.dataset.downloadUrl || url;
+  const localDownload = isLocalDocumentUrl(downloadUrl, "attachment");
+  if (!localDownload && !isOfficialUrl(downloadUrl)) {
+    toast("This document link is not available.");
+    return;
+  }
+  const token = ++documentPreviewToken;
+  const isCurrentPreview = () => token === documentPreviewToken && dom.dialog.open;
+  dom.documentTitle.textContent = filename;
+  dom.documentStatus.hidden = false;
+  dom.documentStatus.textContent = "Loading document preview…";
+  dom.documentFrame.hidden = true;
+  dom.documentFrame.src = "about:blank";
+  dom.documentDownload.href = downloadUrl;
+  dom.documentDownload.download = filename;
+  const noticeUrl = button.dataset.noticeUrl;
+  dom.documentOriginal.hidden = !isOfficialUrl(noticeUrl);
+  if (isOfficialUrl(noticeUrl)) dom.documentOriginal.href = noticeUrl;
+  dom.documentOpen.href = url;
+  dom.documentFrame.onload = () => {
+    if (!isCurrentPreview()) return;
+    if (dom.documentFrame.src.endsWith("about:blank")) return;
+    window.clearTimeout(documentPreviewTimer);
+    dom.documentStatus.hidden = false;
+    dom.documentStatus.textContent = "Preview opened. If it is blank, download the file or open it in a new tab.";
+    dom.documentFrame.hidden = false;
+  };
+  dom.documentFrame.onerror = () => {
+    if (!isCurrentPreview()) return;
+    window.clearTimeout(documentPreviewTimer);
+    dom.documentStatus.textContent = "The PDF preview could not be loaded. Try downloading it or opening the file in a new tab.";
+  };
+  if (!dom.dialog.open) dom.dialog.showModal();
+  const loadFrame = () => {
+    if (!isCurrentPreview()) return;
+    dom.documentFrame.src = url;
+    documentPreviewTimer = window.setTimeout(() => {
+      if (isCurrentPreview() && dom.documentFrame.hidden) {
+        dom.documentStatus.textContent = "The preview is taking too long. Download the file or open it in a new tab.";
+      }
+    }, 15_000);
+  };
+  if (localPreview) {
+    fetch(url, { headers: { Range: "bytes=0-4" } })
+      .then(async (response) => {
+        const contentType = response.headers.get("Content-Type") || "";
+        if (!response.ok || !contentType.toLowerCase().includes("application/pdf")) {
+          throw new Error("The archived PDF is unavailable.");
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("The archived PDF could not be read.");
+        let bytes = new Uint8Array();
+        while (bytes.length < 5) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const merged = new Uint8Array(bytes.length + value.length);
+          merged.set(bytes);
+          merged.set(value, bytes.length);
+          bytes = merged;
+        }
+        await reader.cancel();
+        if (new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") {
+          throw new Error("The archived file is not a valid PDF.");
+        }
+      })
+      .then(() => {
+        loadFrame();
+      })
+      .catch(() => {
+        if (isCurrentPreview()) {
+          dom.documentStatus.textContent = "The archived PDF could not be loaded. Try downloading it or opening the file in a new tab.";
+        }
+      });
+  } else {
+    loadFrame();
+  }
+}
+
+function closeMobileNav() {
+  dom.nav.classList.remove("is-open");
+  dom.menuToggle.setAttribute("aria-expanded", "false");
+  $(".sr-only", dom.menuToggle).textContent = "Open navigation menu";
+}
+
+dom.refresh.addEventListener("click", () => fetchFeed({ force: true }));
+dom.searchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  window.clearTimeout(searchTimer);
+  state.query = dom.search.value.trim().slice(0, 120);
+  changeFilters();
+});
+
+let searchTimer = null;
+dom.search.addEventListener("input", () => {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    state.query = dom.search.value.trim().slice(0, 120);
+    changeFilters();
+  }, 220);
+});
+dom.semester.addEventListener("change", () => {
+  state.semester = dom.semester.value;
+  changeFilters();
+});
+dom.programme.addEventListener("change", () => {
+  state.programme = dom.programme.value;
+  changeFilters();
+});
+dom.sort.addEventListener("change", () => {
+  state.sort = dom.sort.value;
+  changeFilters();
+});
+dom.pageSize.addEventListener("change", () => {
+  const value = Number(dom.pageSize.value);
+  state.pageSize = PAGE_SIZES.has(value) ? value : 24;
+  changeFilters();
+});
+dom.chips.addEventListener("click", (event) => {
+  const chip = event.target.closest(".category-chip");
+  if (!chip || !dom.chips.contains(chip)) return;
+  state.category = chip.dataset.category;
+  changeFilters();
+});
+dom.pagePrevious.addEventListener("click", () => {
+  if (state.page <= 1) return;
+  state.page -= 1;
+  if (state.serverPaginated) fetchFeed({ silent: true });
+  else renderFeed();
+});
+dom.pageNext.addEventListener("click", () => {
+  const count = Math.ceil(state.total / state.pageSize);
+  if (state.page >= count) return;
+  state.page += 1;
+  if (state.serverPaginated) fetchFeed({ silent: true });
+  else renderFeed();
+});
 dom.reset.addEventListener("click", resetFilters);
-dom.emptyReset.addEventListener("click", resetFilters);
+dom.emptyReset.addEventListener("click", () => {
+  if (state.source === "unavailable" && !state.notices.length) fetchFeed({ force: true });
+  else resetFilters();
+});
+dom.feed.addEventListener("click", (event) => {
+  const preview = event.target.closest("[data-preview-url]");
+  if (preview) showDocument(preview);
+});
+dom.documentClose.addEventListener("click", () => dom.dialog.close());
+dom.dialog.addEventListener("close", () => {
+  documentPreviewToken += 1;
+  window.clearTimeout(documentPreviewTimer);
+  dom.documentFrame.src = "about:blank";
+  dom.documentFrame.hidden = true;
+});
+dom.dialog.addEventListener("click", (event) => {
+  if (event.target === dom.dialog) dom.dialog.close();
+});
+dom.menuToggle.addEventListener("click", () => {
+  const expanded = dom.menuToggle.getAttribute("aria-expanded") === "true";
+  dom.menuToggle.setAttribute("aria-expanded", String(!expanded));
+  dom.nav.classList.toggle("is-open", !expanded);
+  $(".sr-only", dom.menuToggle).textContent = expanded ? "Open navigation menu" : "Close navigation menu";
+});
+dom.nav.addEventListener("click", (event) => {
+  if (event.target.closest("a")) closeMobileNav();
+});
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "/" && document.activeElement !== dom.search) {
+  if (event.key === "/" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
     event.preventDefault();
     dom.search.focus();
   }
-  if (event.key === "Escape" && document.activeElement === dom.search) {
+  if (event.key === "Escape" && document.activeElement === dom.search && dom.search.value) {
     dom.search.value = "";
     state.query = "";
-    renderFeed();
-    dom.search.blur();
+    changeFilters();
   }
 });
-
 window.addEventListener("online", () => fetchFeed({ silent: true }));
-
-// The feed follows the portal by itself: every five minutes, and again whenever
-// the tab comes back into focus, so a new notice shows up without a reload.
-const POLL_MS = 5 * 60 * 1000;
-window.setInterval(() => {
-  if (document.visibilityState === "visible") fetchFeed({ silent: true });
-}, POLL_MS);
-
-function refreshIfStale() {
-  if (document.visibilityState !== "visible") return;
-  const age = state.fetchedAt ? Date.now() - new Date(state.fetchedAt).getTime() : Infinity;
-  if (age > 60_000) fetchFeed({ silent: true });
-}
-
-document.addEventListener("visibilitychange", refreshIfStale);
-window.addEventListener("focus", refreshIfStale);
-
-/* ------------------------------------------------------------------ boot */
 
 function boot() {
   render();
   const cached = readCache();
   if (cached) {
     state.notices = cached.notices;
-    state.source = cached.source || "fallback";
-    state.site = cached.site || "";
+    state.source = cached.source || "unavailable";
+    state.site = cached.source_site || "";
     state.fetchedAt = cached.fetched_at || null;
-    state.error = cached.error || null;
+    state.syncStatus = cached.sync_status || null;
+    state.total = Number.isSafeInteger(cached.total) ? cached.total : cached.notices.length;
+    state.summary = normalizeSummary(cached.summary, cached.notices, cached.source);
+    state.serverPaginated = cached.source === "archive";
+    state.categoryCounts = cached.category_counts || {};
+    state.programmeOptions = Array.isArray(cached.programme_options) ? cached.programme_options : [];
+    renderProgrammeOptions();
     render();
-    const age = state.fetchedAt ? Date.now() - new Date(state.fetchedAt).getTime() : Infinity;
-    // The curated fallback is a stopgap, never a reason to skip a live check.
-    if (age > CACHE_TTL || state.source !== "live") fetchFeed();
-  } else {
-    fetchFeed();
   }
-
-  window.setInterval(renderBadge, 30_000);
+  fetchFeed({ silent: true });
 }
 
 boot();
