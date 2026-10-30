@@ -23,7 +23,7 @@ def test_save_and_get_notice_roundtrip():
         "category": "Exam Routine",
         "semester": "4th Sem",
         "publish_date": "2081-06-24",
-        "url": "https://tuiost.edu.np/notices/1",
+        "url": "https://iost.tu.edu.np/notices/1",
         "is_urgent": True,
     }
     assert save_notice(n, path) is True
@@ -39,7 +39,7 @@ def test_notice_hash_is_deterministic_across_processes():
     n = {
         "title": "B.Sc. CSIT 4th Semester Exam Routine Published",
         "publish_date": "2081-06-24",
-        "url": "https://tuiost.edu.np/notices/1",
+        "url": "https://iost.tu.edu.np/notices/1",
     }
     h1 = _notice_hash(n)
     h2 = _notice_hash(n)
@@ -54,7 +54,7 @@ def test_duplicate_without_explicit_hash_still_detected():
         "category": "Results",
         "semester": "6th Sem",
         "publish_date": "2081-06-18",
-        "url": "https://tuiost.edu.np/notices/2",
+        "url": "https://iost.tu.edu.np/notices/2",
         "is_urgent": False,
     }
     assert save_notice(n, path) is True
@@ -66,12 +66,12 @@ def test_get_notices_filters_by_category_and_semester():
     save_notice({
         "notice_hash": "h1", "title": "Routine 4th", "category": "Exam Routine",
         "semester": "4th Sem", "publish_date": "2081-06-24",
-        "url": "https://tuiost.edu.np/n1", "is_urgent": True,
+        "url": "https://iost.tu.edu.np/notices/n1", "is_urgent": True,
     }, path)
     save_notice({
         "notice_hash": "h2", "title": "Result 6th", "category": "Results",
         "semester": "6th Sem", "publish_date": "2081-06-18",
-        "url": "https://tuiost.edu.np/n2", "is_urgent": True,
+        "url": "https://iost.tu.edu.np/notices/n2", "is_urgent": True,
     }, path)
     assert len(get_notices(category="Exam Routine", db_path=path)) == 1
     assert len(get_notices(semester="4th Sem", db_path=path)) == 1
@@ -82,7 +82,7 @@ def test_get_notices_search_query():
     save_notice({
         "notice_hash": "h3", "title": "Back Exam Form Fill Up Notice",
         "category": "Form Fill Up", "semester": "All Semesters",
-        "publish_date": "2081-06-10", "url": "https://tuiost.edu.np/n3", "is_urgent": False,
+        "publish_date": "2081-06-10", "url": "https://iost.tu.edu.np/notices/n3", "is_urgent": False,
     }, path)
     assert len(get_notices(search_query="Back Exam", db_path=path)) == 1
     assert get_notices(search_query="nonexistent", db_path=path) == []
@@ -93,7 +93,7 @@ def test_get_notices_search_query():
 # --------------------------------------------------------------------- #
 def test_classify_exam_routine_urgent():
     n = TUScraper._classify_notice(
-        "B.Sc. CSIT 4th Semester Exam Routine Published", "https://tuiost.edu.np/n"
+        "B.Sc. CSIT 4th Semester Exam Routine Published", "https://iost.tu.edu.np/notices/1"
     )
     assert n["category"] == "Exam Routine"
     assert n["is_urgent"] is True
@@ -102,7 +102,7 @@ def test_classify_exam_routine_urgent():
 
 def test_classify_results_urgent():
     n = TUScraper._classify_notice(
-        "Final results published for 6th semester", "https://tuiost.edu.np/n"
+        "Final results published for 6th semester", "https://iost.tu.edu.np/notices/2"
     )
     assert n["category"] == "Results"
     assert n["is_urgent"] is True
@@ -110,7 +110,7 @@ def test_classify_results_urgent():
 
 def test_classify_form_fillup():
     n = TUScraper._classify_notice(
-        "Examination form fill-up deadline extended", "https://tuiost.edu.np/n"
+        "Examination form fill-up deadline extended", "https://iost.tu.edu.np/notices/3"
     )
     assert n["category"] == "Form Fill Up"
     assert n["semester"] == "All Semesters"
@@ -118,7 +118,7 @@ def test_classify_form_fillup():
 
 def test_classify_general():
     n = TUScraper._classify_notice(
-        "Guest lecture on artificial intelligence next week", "https://tuiost.edu.np/n"
+        "Guest lecture on artificial intelligence next week", "https://iost.tu.edu.np/notices/4"
     )
     assert n["category"] == "General Notice"
     assert n["is_urgent"] is False
@@ -126,24 +126,17 @@ def test_classify_general():
 
 def test_semester_1st_does_not_match_21st():
     n = TUScraper._classify_notice(
-        "21st century computing guest lecture", "https://tuiost.edu.np/n"
+        "21st century computing guest lecture", "https://iost.tu.edu.np/notices/5"
     )
     assert n["semester"] == "All Semesters"
 
 
 def test_hash_deterministic_across_calls():
-    n1 = TUScraper._classify_notice("Some notice title", "https://tuiost.edu.np/x")
-    n2 = TUScraper._classify_notice("Some notice title", "https://tuiost.edu.np/x")
+    n1 = TUScraper._classify_notice("Some notice title", "https://iost.tu.edu.np/notices/6")
+    n2 = TUScraper._classify_notice("Some notice title", "https://iost.tu.edu.np/notices/6")
     assert n1["notice_hash"] == n2["notice_hash"]
 
 
 # --------------------------------------------------------------------- #
 # Curated notices
 # --------------------------------------------------------------------- #
-def test_curated_notices_have_stable_hashes():
-    notices = TUScraper.get_curated_csit_notices()
-    assert len(notices) == 6
-    for n in notices:
-        assert n["notice_hash"]
-        assert n["title"]
-        assert n["url"]

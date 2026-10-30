@@ -4,8 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="theme-color" content="#100e0b" />
-<meta name="description" content="TU CSIT Notice Hub: live exam routines, results and form fill-up notices from Tribhuvan University IOST, classified by semester." />
-<title>TU CSIT Notice Hub | Live IOST notices</title>
+<meta name="description" content="Find official Institute of Science and Technology, Tribhuvan University notices for BSc CSIT students." />
+<title>TU CSIT Notice Hub | Official IoST notices</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23100e0b'/%3E%3Cpath d='M9 12h14M9 16h14M9 20h9' stroke='%23e0714f' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="stylesheet" href="styles.css?v=7" />
@@ -44,12 +44,11 @@
   <main>
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero__copy">
-        <p class="eyebrow">iost.tu.edu.np · checked every five minutes</p>
+        <p class="eyebrow">Institute of Science and Technology · Tribhuvan University</p>
         <h1 id="hero-title">Every notice,<br /><em>one feed.</em></h1>
         <p class="hero__sub">
-          Exam routines, results and form fill-up notices from the Institute of Science
-          and Technology, classified by semester and sorted by publication date. New
-          notices appear here on their own, without a refresh loop.
+          Find official exam routines, results and academic notices, organized by
+          semester and publication date.
         </p>
       </div>
 
@@ -121,6 +120,12 @@
       <article class="notice is-skeleton"></article>
     </section>
 
+    <nav class="pagination" id="pagination" aria-label="Notice pages" hidden>
+      <button class="btn btn--ghost" id="page-previous" type="button">Previous</button>
+      <span id="page-status" aria-live="polite">Page 1</span>
+      <button class="btn btn--ghost" id="page-next" type="button">Next</button>
+    </nav>
+
     <div class="empty" id="empty" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
       <h2>Nothing matches that filter</h2>
@@ -132,9 +137,7 @@
   <footer class="footer">
     <p>
       Source: <a href="https://iost.tu.edu.np/notices" target="_blank" rel="noreferrer noopener">iost.tu.edu.np/notices</a>,
-      the official IoST site. Notices are read from the portal every five minutes, and the newest one is shown first.
-      If that site cannot be reached, the feed falls back to the older
-      <a href="https://tuiost.edu.np/notices" target="_blank" rel="noreferrer noopener">tuiost.edu.np/notices</a> listing.
+      the official IoST site. Imported notices are retained in the local archive if they are later removed upstream.
     </p>
     <p>Built by <a href="https://github.com/hola-mundo999" target="_blank" rel="noreferrer noopener">Samyog Sapkota</a></p>
   </footer>

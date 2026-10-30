@@ -125,6 +125,7 @@ a:hover { text-decoration: underline; }
 }
 .source__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .source[data-source="live"] { color: var(--green); border-color: rgba(157, 187, 132, 0.34); }
+.source[data-source="archive"] { color: var(--green); border-color: rgba(157, 187, 132, 0.34); }
 .source[data-source="fallback"] { color: var(--gold); border-color: rgba(216, 166, 87, 0.34); }
 .source[data-source="error"] { color: var(--red); border-color: rgba(224, 113, 79, 0.36); }
 .source[data-source="loading"] { color: var(--dim); }
@@ -466,10 +467,10 @@ a:hover { text-decoration: underline; }
 .notice__date strong { font-family: var(--mono); font-size: 10.5px; line-height: 1.45; color: var(--muted); font-weight: 500; }
 .notice__date span { font-family: var(--mono); font-size: 9.5px; line-height: 1.45; color: var(--dim); }
 
-.notice__actions { display: flex; gap: 6px; }
+.notice__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .icon-btn {
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -480,6 +481,23 @@ a:hover { text-decoration: underline; }
 }
 .icon-btn svg { width: 14px; height: 14px; }
 .icon-btn:hover { color: var(--accent); border-color: rgba(224, 113, 79, 0.38); background: var(--accent-soft); }
+.document-action { min-height: 40px; padding: 8px 11px; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.pagination[hidden] { display: none; }
+.pagination span {
+  min-width: 90px;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.pagination button { min-height: 42px; }
 
 .empty {
   display: flex;
@@ -553,6 +571,8 @@ a:hover { text-decoration: underline; }
   .search { flex: 0 0 auto; }
   .select { justify-content: space-between; }
   .feed { grid-template-columns: 1fr; }
+  .notice__foot { align-items: flex-start; flex-direction: column; }
+  .notice__actions { width: 100%; justify-content: flex-start; }
   .footer { flex-direction: column; gap: 6px; }
 }
 

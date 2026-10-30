@@ -7,6 +7,7 @@ so parsing the new markup is what keeps the feed from going stale again.
 import importlib.util
 import pathlib
 
+import requests
 from bs4 import BeautifulSoup
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -67,15 +68,21 @@ def test_nepali_titles_are_classified_too():
 class _Response:
     def __init__(self, text):
         self.text = text
+        self.headers = {}
+        self.status_code = 200
+        self.is_redirect = False
 
     def raise_for_status(self):
+        return None
+
+    def close(self):
         return None
 
 
 def test_scrape_reads_the_current_site_first(monkeypatch):
     html = FIXTURE.read_text(encoding="utf-8")
 
-    def fake_get(url, **kwargs):
+    def fake_get(url, **_kwargs):
         if "iost.tu.edu.np" in url:
             return _Response(html)
         raise AssertionError("the legacy portal should not be consulted")
@@ -87,23 +94,46 @@ def test_scrape_reads_the_current_site_first(monkeypatch):
     assert found[0]["publish_date"] >= found[-1]["publish_date"]
 
 
-def test_scrape_falls_back_when_the_new_site_is_unreachable(monkeypatch):
-    legacy = """
-    <div class="feature-content">
-      <div class="mt-3">
-        <a href="/storage/notice/routine.pdf"><b>B.Sc.CSIT Exam Routine</b></a>
-        <small>26th Jul, 2026</small>
-      </div>
-    </div>
-    """
-
-    def fake_get(url, **kwargs):
+def test_scrape_does_not_substitute_the_stale_legacy_site(monkeypatch):
+    def fake_get(url, **_kwargs):
         if "iost.tu.edu.np" in url:
-            raise OSError("connection refused")
-        return _Response(legacy)
+            raise requests.ConnectionError("connection refused")
+        raise AssertionError("an unapproved legacy notice source was consulted")
 
     monkeypatch.setattr(notices.requests, "get", fake_get)
+    monkeypatch.setattr(notices, "MAX_RETRIES", 1)
     found, site, error = notices.scrape()
-    assert found, "the feed must keep working on the legacy portal"
-    assert site == "tuiost.edu.np"
-    assert found[0]["publish_date"] == "2026-07-26"
+    assert found == []
+    assert site == "iost.tu.edu.np"
+    assert "ConnectionError" in error
+
+
+def test_detail_parser_extracts_title_date_and_attachment():
+    soup = BeautifulSoup("""
+      <div class="detail-page-inner">
+        <h4 class="title">B.Sc.CSIT exam schedule</h4>
+        <span class="nep_date">2026-10-26</span>
+      </div>
+      <table><tbody><tr>
+        <td>Exam schedule</td><td>pdf</td>
+        <td><a href="https://portal.tu.edu.np/notice/12/schedule.pdf">Download</a></td>
+      </tr></tbody></table>
+    """, "html.parser")
+    parsed = notices.parse_iost_detail(soup, "https://iost.tu.edu.np/notices/12")
+    assert parsed["title"] == "B.Sc.CSIT exam schedule"
+    assert parsed["publish_date"] == "2026-10-26"
+    assert parsed["attachments"] == [{
+        "url": "https://portal.tu.edu.np/notice/12/schedule.pdf",
+        "filename": "schedule.pdf",
+        "file_type": "pdf",
+    }]
+
+
+def test_detail_parser_ignores_attachment_links_on_untrusted_hosts():
+    soup = BeautifulSoup("""
+      <div class="detail-page-inner"><h4 class="title">Notice title</h4></div>
+      <table><tbody><tr><td>file.pdf</td><td>pdf</td>
+      <td><a href="https://example.com/file.pdf">Download</a></td></tr></tbody></table>
+    """, "html.parser")
+    parsed = notices.parse_iost_detail(soup, "https://iost.tu.edu.np/notices/12")
+    assert parsed["attachments"] == []

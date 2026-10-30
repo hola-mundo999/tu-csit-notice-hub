@@ -5,6 +5,9 @@
   "functions": {
     "api/notices.py": {
       "maxDuration": 30
+    },
+    "api/document.py": {
+      "maxDuration": 30
     }
   }
 }
